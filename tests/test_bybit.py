@@ -94,6 +94,24 @@ def test_risk_gate():
     print("ok  risk gate (concurrent, open-risk cap, kill switch)")
 
 
+def test_risk_caps_follow_compounded_equity():
+    """총자산대비 rule (복리 단타 비법서 시스템 #2): the open-risk cap must be
+    measured against CURRENT equity, not the starting stake."""
+    cfg = BybitConfig()
+    cfg.max_total_open_risk_pct = 2.0        # 2% of equity
+    risk = BybitRiskManager(cfg, Journal(), BotState())
+    # $3 risk on $200 equity (cap $4) → allowed
+    assert risk.allow_entry(0, 0.0, 3.0, equity_usd=200.0)[0]
+    # same $3 risk after equity halved to $100 (cap $2) → blocked
+    ok, why = risk.allow_entry(0, 0.0, 3.0, equity_usd=100.0)
+    assert not ok and "open_risk" in why, why
+    # after equity compounds to $400 (cap $8), $6 risk → allowed
+    assert risk.allow_entry(0, 0.0, 6.0, equity_usd=400.0)[0]
+    # no equity passed → falls back to config stake (back-compat)
+    assert risk.allow_entry(0, 0.0, 3.0)[0]
+    print("ok  risk caps follow compounded equity (총자산대비)")
+
+
 # ------------------------------------------------------------- position FSM
 
 def _pm(cfg=None):
@@ -407,6 +425,7 @@ if __name__ == "__main__":
     test_indicators()
     test_sizing()
     test_risk_gate()
+    test_risk_caps_follow_compounded_equity()
     test_fsm_stop_loss()
     test_fsm_partial_then_trail()
     test_fsm_pyramiding()

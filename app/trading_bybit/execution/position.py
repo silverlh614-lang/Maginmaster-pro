@@ -88,7 +88,8 @@ class PositionManager:
             self.note = f"size skip: {why}"
             return False
         ok, gate = self.risk.allow_entry(self.open_positions, self.open_risk_usd,
-                                         risk_usd, is_add=False)
+                                         risk_usd, is_add=False,
+                                         equity_usd=self.equity)
         if not ok:
             self.note = f"entry blocked: {gate}"
             return False
@@ -129,7 +130,8 @@ class PositionManager:
         if qty <= 0:
             return False
         ok, gate = self.risk.allow_entry(self.open_positions, self.open_risk_usd,
-                                         risk_usd, is_add=True)
+                                         risk_usd, is_add=True,
+                                         equity_usd=self.equity)
         if not ok:
             self.note = f"add blocked: {gate}"
             return False

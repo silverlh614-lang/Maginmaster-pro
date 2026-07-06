@@ -64,13 +64,18 @@ class BybitRiskManager:
         return self.journal.aggregate(day=_today())
 
     def allow_entry(self, open_positions: int, open_risk_usd: float,
-                    new_risk_usd: float, is_add: bool = False) -> tuple[bool, str]:
+                    new_risk_usd: float, is_add: bool = False,
+                    equity_usd: float | None = None) -> tuple[bool, str]:
         """Single permission point. open_positions / open_risk_usd describe
-        live exposure right now; new_risk_usd is the R this order would add."""
+        live exposure right now; new_risk_usd is the R this order would add.
+
+        equity_usd is the CURRENT compounded equity — the source's 총자산대비
+        rule: every % cap is measured against what the account is worth now,
+        not the starting stake. Falls back to the config stake if absent."""
         if self.kill_switch:
             return False, f"kill_switch: {self.kill_reason}"
         t = self.today()
-        equity = self.cfg.equity_usd
+        equity = equity_usd if equity_usd and equity_usd > 0 else self.cfg.equity_usd
         if t["trades"] >= self.cfg.max_trades_per_day:
             return False, f"max_trades_per_day ({self.cfg.max_trades_per_day}) reached"
         if t["pnl_usd"] <= -abs(equity * self.cfg.daily_loss_cap_pct / 100.0):
