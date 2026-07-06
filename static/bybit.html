@@ -267,6 +267,7 @@
         <div class="wallet"><span class="tag">복리 EQUITY</span><span id="eqPath">시작 대비 --</span></div>
         <div class="meganum" id="equityBig">$0.00</div>
         <div class="subline" id="equitySub">실현손익 --</div>
+        <div class="subline" id="equityMark" style="margin-top:3px">평가액 --</div>
         <div class="stat3">
           <div><div class="label">승률</div><div class="val" id="mWr">–</div></div>
           <div><div class="label">R 기대값</div><div class="val" id="mR">–</div></div>
@@ -274,6 +275,8 @@
         </div>
         <div class="wrbar"><div class="cap"><span>WIN RATE</span><span id="wrPct">–</span></div>
           <div class="tr"><i id="wrBar"></i></div></div>
+        <div class="wrbar"><div class="cap"><span>일일 손실캡 소진</span><span id="capPct">–</span></div>
+          <div class="tr"><i id="capBar" style="background:var(--dn)"></i></div></div>
         <div class="wrbar"><div class="cap"><span>수수료 누적</span><span id="mFee">$0.00</span></div></div>
       </div>
     </section>
@@ -415,7 +418,7 @@ setInterval(clock,1000);clock();
 async function loadConfig(){try{
   const d=await api("/api/bybit/config");const sel=$("stratSel");sel.innerHTML="";
   d.strategies.forEach(s=>{const o=document.createElement("option");o.value=o.textContent=s;sel.appendChild(o)});
-  const c=d.config;
+  const c=d.config;window._cfg=c;
   $("cLev").textContent="≤ "+fmt(c.leverage_max,1)+"x (목표 "+fmt(c.leverage,1)+"x)";
   $("cRisk").textContent=fmt(c.risk_per_trade_pct,2)+"% / 거래";
   $("cRR").textContent=fmt(c.rr_target,1)+" : 1";
@@ -580,6 +583,23 @@ async function refresh(){
   $("equityBig").style.color=(agg.pnl_usd||0)>=0?"var(--up)":"var(--dn)";
   $("equitySub").textContent="실현손익 "+money(agg.pnl_usd||0)+" · "+(agg.settled||0)+"청산";
   $("eqPath").textContent=eq!=null&&agg.pnl_usd!=null?("시작 대비 "+money(agg.pnl_usd)):"–";
+  // 평가액 = 복리 EQUITY + 미실현 (포지션 열려 있을 때 실시간으로 움직임)
+  const _pos=mgr.position, _ur=(_pos&&_pos.state==="OPEN"&&_pos.unrealized_usd!=null)?_pos.unrealized_usd:null;
+  if(eq!=null&&_ur!=null){
+    $("equityMark").textContent="평가액 "+money(eq+_ur)+" (미실현 "+money(_ur)+")";
+    $("equityMark").style.color=_ur>=0?"var(--up)":"var(--dn)";
+  }else{
+    $("equityMark").textContent="평가액 = EQUITY (미실현 없음)";
+    $("equityMark").style.color="";
+  }
+  // 일일 손실캡 소진율 — 캡 기준은 현재 복리 equity (총자산대비)
+  const _cfg=window._cfg;
+  if(_cfg&&eq!=null&&eq>0){
+    const capUsd=eq*_cfg.daily_loss_cap_pct/100.0, dPnl=today.pnl_usd||0;
+    const used=dPnl<0?Math.min(100,(-dPnl/capUsd)*100):0;
+    $("capBar").style.width=used.toFixed(1)+"%";
+    $("capPct").textContent=used>0?(used.toFixed(0)+"% ("+money(dPnl)+" / -"+money(capUsd)+")"):("0% (캡 -"+money(capUsd)+")");
+  }
   const wr=agg.win_rate!=null?agg.win_rate*100:null;
   $("mWr").textContent=wr!=null?wr.toFixed(0)+"%":"–";
   $("wrPct").textContent=wr!=null?wr.toFixed(0)+"%":"–";$("wrBar").style.width=(wr||0)+"%";
