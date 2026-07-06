@@ -101,9 +101,11 @@ def trades_csv(symbol: str | None = None, limit: int = 100_000):
 
 
 class BacktestRequest(BaseModel):
+    # overrides accepts strings too so interval fields can be swept
+    # (H7: htf_interval "60"|"240"|"D") alongside numeric params.
     symbol: str = "BTC"
     strategy: str = "trend_breakout"
-    overrides: dict[str, float] = {}
+    overrides: dict[str, float | str] = {}
 
 
 @router.post("/backtest")
@@ -121,7 +123,16 @@ def backtest(req: BacktestRequest):
     for k, v in req.overrides.items():
         if not hasattr(cfg, k):
             raise HTTPException(422, f"unknown config field '{k}'")
-        setattr(cfg, k, type(getattr(cfg, k))(v))
+        cur = getattr(cfg, k)
+        try:
+            if isinstance(cur, bool):   # bool("0") is True — parse explicitly
+                val = (v.strip().lower() in ("1", "true", "yes", "on")
+                       if isinstance(v, str) else bool(v))
+            else:
+                val = type(cur)(v)
+        except (TypeError, ValueError):
+            raise HTTPException(422, f"bad value for '{k}': {v!r}")
+        setattr(cfg, k, val)
     try:
         r = replay(req.symbol, req.strategy, cfg)
     except Exception as e:

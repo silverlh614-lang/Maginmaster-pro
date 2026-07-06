@@ -376,6 +376,20 @@
       </div>
     </section>
 
+    <!-- 사이클 컨텍스트 (Part 1~3 모델 연동 — 표시 전용, 매매 로직 무개입) -->
+    <section class="panel col-4">
+      <div class="phead"><span class="mk">◆</span> 사이클 컨텍스트 <span class="sp"></span>
+        <span class="r"><a href="/model" style="font-size:10px">모델 →</a></span></div>
+      <div class="pbody">
+        <div class="row"><span class="l">FSM 국면</span><span class="v" id="cyPhase">–</span></div>
+        <div class="row"><span class="l">vs 실현가격</span><span class="v" id="cyRp">–</span></div>
+        <div class="row"><span class="l">vs 200주선</span><span class="v" id="cyMa">–</span></div>
+        <div class="row"><span class="l">스냅샷 기준일</span><span class="v muted" id="cySnap">–</span></div>
+        <div class="note" style="margin-top:6px">실현가격 = 결정적 선 (§6.2). 이탈/회복은
+          regime 스위치 — 알림으로 통지. FSM은 마지막 수동 입력 기준.</div>
+      </div>
+    </section>
+
     <!-- 백테스트 -->
     <section class="panel col-4">
       <div class="phead"><span class="mk">◆</span> 백테스트 게이트 (Phase 2)</div>
@@ -459,6 +473,21 @@ function notify(kind,title,msg,sound=true){
   el.onclick=()=>el.remove();box.appendChild(el);
   setTimeout(()=>{el.classList.add("out");setTimeout(()=>el.remove(),260);},5000);
   if(sound)beep(kind);
+}
+
+// ---- 사이클 컨텍스트 (Part 1~3 모델 — 표시 전용) ----
+async function loadCycle(){
+  try{window._snap=await api("/api/snapshot");}catch(e){}
+  try{window._fsm=await api("/api/fsm/state");}catch(e){}
+  const s=window._snap,f=window._fsm;
+  if(f&&f.phase){
+    const P={watch:["WATCH","muted"],capitulation_watch:["CAP_WATCH","dn"],
+             accumulate:["ACCUMULATE","up"],confirm:["CONFIRM","up"],trend:["TREND","up"]};
+    const[label,cls]=P[f.phase]||[f.phase.toUpperCase(),"muted"];
+    $("cyPhase").innerHTML=`<span class="${cls}">${label}</span>`+
+      (f.fired!=null?` <span class="muted">(트랜치 ${f.fired}/${f.ladder_tranches})</span>`:"");
+  }
+  if(s&&s.snapshot_date)$("cySnap").textContent=s.snapshot_date+" (재검증 필요 시 /refresh-snapshot)";
 }
 
 // ---- 복리 EQUITY 스파크라인 (저널 청산 누적 → 시작금 기준선 대비) ----
@@ -678,11 +707,22 @@ async function refresh(){
     $("capPct").textContent=used>0?(used.toFixed(0)+"% ("+money(dPnl)+" / -"+money(capUsd)+")"):("0% (캡 -"+money(capUsd)+")");
   }
 
+  // ---- 사이클 컨텍스트: 현물가 vs 결정적 선 실시간 비교 (§6.2) ----
+  const snap=window._snap;
+  let aboveRp=null, aboveMa=null;
+  if(snap&&px!=null){
+    aboveRp=px>=snap.realized_price; aboveMa=px>=snap.ma_200w;
+    const dRp=(px/snap.realized_price-1)*100, dMa=(px/snap.ma_200w-1)*100;
+    $("cyRp").innerHTML=`<span class="${aboveRp?'up':'dn'}">${aboveRp?'▲ 위':'▼ 아래'} ${fmt(Math.abs(dRp),1)}%</span> <span class="muted">(${money(snap.realized_price)})</span>`;
+    $("cyMa").innerHTML=`<span class="${aboveMa?'up':'dn'}">${aboveMa?'▲ 위':'▼ 아래'} ${fmt(Math.abs(dMa),1)}%</span> <span class="muted">(${money(snap.ma_200w)})</span>`;
+  }
+
   // ---- 이벤트 알림: 직전 폴과 diff (첫 폴은 기준만 기록) ----
   const nowEv={pos:_pos?_pos.state:null, side:_pos?_pos.side:null,
     partial:!!(_pos&&_pos.partial_done), adds:_pos?_pos.units:0,
     kill:!!(s.risk&&s.risk.kill_switch), ready:!!(dg&&dg.ready),
-    dir:dg?dg.allowed:null, div:!!col.divergence, dayPnl:today.pnl_usd||0};
+    dir:dg?dg.allowed:null, div:!!col.divergence, dayPnl:today.pnl_usd||0,
+    rp:aboveRp, ma:aboveMa};
   const pv=window._prevEv;
   if(pv){
     if(!pv.kill&&nowEv.kill)notify("warn","⛔ 킬스위치 발동",(s.risk&&s.risk.kill_reason)||"");
@@ -702,6 +742,15 @@ async function refresh(){
       notify("brand","★ 게이트 4/4 — "+(nowEv.dir||"")+" 준비 완료","다음 봉 진입 후보");
     if(!pv.div&&nowEv.div)
       notify("warn","⚠ 시세 교차검증 괴리","Δ"+fmt(col.cross_dev_pct,2)+"% vs "+(col.cross_source||""));
+    // regime 스위치 (§6.2): 결정적 선 돌파는 사이클 국면 전환 후보
+    if(pv.rp!=null&&nowEv.rp!=null&&pv.rp!==nowEv.rp)
+      notify(nowEv.rp?"win":"warn",
+        nowEv.rp?"⚡ 실현가격 상향 회복":"⚡ 실현가격 하향 이탈",
+        "결정적 선 "+money(snap.realized_price)+" — regime 스위치 (§6.2)");
+    if(pv.ma!=null&&nowEv.ma!=null&&pv.ma!==nowEv.ma)
+      notify(nowEv.ma?"win":"warn",
+        nowEv.ma?"200주선 재탈환":"200주선 이탈",
+        money(snap.ma_200w)+" — 사이클 지지선 (§6.1 렌즈②)");
   }
   window._prevEv=nowEv;
   const wr=agg.win_rate!=null?agg.win_rate*100:null;
@@ -805,7 +854,8 @@ async function runBacktest(){$("btOut").textContent="리플레이 중… (Bybit 
       <br><span class="muted" style="font-size:10px">${d.snapshots} 바 평가 · 최종자산 ${money(d.final_equity)}</span>`;
   }catch(e){$("btOut").innerHTML='<span class="dn">실패: '+e.message+'</span>';}}
 
-renderBell();loadConfig();refresh();loadCandles();loadJournal();
+renderBell();loadConfig();refresh();loadCandles();loadJournal();loadCycle();
+setInterval(loadCycle,60000);
 setInterval(refresh,2500);
 setInterval(loadCandles,7000);
 setInterval(loadJournal,6000);

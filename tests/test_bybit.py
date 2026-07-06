@@ -206,6 +206,49 @@ def test_strategy_signal():
     print("ok  strategy trend-breakout LONG signal")
 
 
+def _downtrend_breakdown_lowvol():
+    """HTF: 20-bar box [100,110] then a breakdown bar to 80.
+    Entry: downtrend ending with a bearish engulfing but NO volume spike
+    (vol == MA, below MA*1.2) — the H8 scenario from the source p31."""
+    htf = []
+    for i in range(24):
+        base = 100 + (i % 3)
+        htf.append(_c(i * 3600000, base, 110, 100, 105))
+    htf.append(_c(24 * 3600000, 102, 103, 78, 80, 500))      # breakdown
+    entry = []
+    px = 130.0
+    for i in range(28):
+        entry.append(_c(i * 900000, px, px + 1, px - 1, px - 0.5, 100))
+        px -= 0.5
+    prev = _c(28 * 900000, 118.0, 119.0, 117.2, 118.6, 100)  # bullish
+    cur = _c(29 * 900000, 118.8, 119.0, 114.0, 115.0, 100)   # bearish engulf, vol=MA
+    entry += [prev, cur]
+    return htf, entry
+
+
+def test_short_vol_exempt_flag():
+    """H8 infra: SHORT with a no-volume bearish engulfing fires ONLY when the
+    short_vol_exempt flag is on (default off keeps the volume gate)."""
+    htf, entry = _downtrend_breakdown_lowvol()
+
+    cfg = BybitConfig()
+    assert cfg.short_vol_exempt is False          # 라이브 기본값은 off
+    strat = make_strategy("trend_breakout", cfg)
+    ctx = BybitContext(symbol="BTC", htf_candles=htf, entry_candles=entry,
+                       equity_usd=200, now=0)
+    d = strat.diagnose(ctx)
+    assert d and d["allowed"] == "SHORT", d
+    assert strat.evaluate(ctx) is None            # 거래량 미달 → 차단 (기존 동작)
+
+    cfg2 = BybitConfig()
+    cfg2.short_vol_exempt = True                  # 백테스트 A/B의 on 케이스
+    strat2 = make_strategy("trend_breakout", cfg2)
+    sig = strat2.evaluate(ctx)
+    assert sig is not None and sig.side is Side.SHORT, sig
+    assert sig.stop_price > sig.entry_hint        # SHORT: 스탑은 진입가 위
+    print("ok  H8 short_vol_exempt flag (off=blocked, on=SHORT fires)")
+
+
 # ------------------------------------------------------------- backtest
 
 def _coherent_series(n=200):
@@ -430,6 +473,7 @@ if __name__ == "__main__":
     test_fsm_partial_then_trail()
     test_fsm_pyramiding()
     test_strategy_signal()
+    test_short_vol_exempt_flag()
     test_backtest_replay()
     test_candles_export()
     test_kline_source_failover()

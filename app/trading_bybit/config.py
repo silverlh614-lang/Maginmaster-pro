@@ -51,6 +51,9 @@ class BybitConfig:
     require_volume: bool = True          # 거래량 동반 요구
     vol_ma_period: int = 20              # entry candle volume must exceed MA*k
     vol_mult: float = 1.2
+    # H8 (원전 p31: 무거래량 음봉 장악형은 공매도 타점) — 백테스트 A/B 검증용.
+    # hypothesis_registry H8 통과 전 라이브 기본값 변경 금지.
+    short_vol_exempt: bool = False       # SHORT 한정 거래량 게이트 면제
 
     # --- System #2: risk management (ATR sizing) ---------------------------
     atr_period: int = 14

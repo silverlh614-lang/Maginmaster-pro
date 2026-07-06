@@ -55,6 +55,9 @@ class TrendBreakoutStrategy(BybitStrategy):
         vma = sma([x.volume for x in ef], c.vol_ma_period)
         vol_ratio = (cur.volume / vma) if vma else None
         vol_ok = (not c.require_volume) or (vma is None) or (cur.volume >= vma * c.vol_mult)
+        # H8 (원전 p31): 하락 추세는 거래량 없이도 진행 — SHORT 한정 면제 (기본 off)
+        if not vol_ok and allowed is Side.SHORT and c.short_vol_exempt:
+            vol_ok = True
 
         a = atr(ef, c.atr_period)
         entry_ref = cur.close
