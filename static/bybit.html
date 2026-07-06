@@ -32,8 +32,8 @@
 
   .top{display:flex;align-items:center;gap:14px;padding:9px 14px;
     border-bottom:1px solid var(--border);background:#07090b}
-  .logo{width:34px;height:34px;flex:none;display:grid;place-items:center;
-    background:var(--brand);color:#171204;font-weight:800;font-size:19px;border-radius:4px}
+  .logo{width:34px;height:34px;flex:none;display:block;border-radius:8px;
+    border:1px solid var(--border-hi);box-shadow:0 0 12px rgba(247,147,26,.18)}
   .brand b{font-size:15px;letter-spacing:.12em}
   .brand .sub{color:var(--dim);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase}
   .top .mid{flex:1;text-align:center;color:var(--dim);font-size:10.5px;letter-spacing:.22em;text-transform:uppercase}
@@ -225,7 +225,7 @@
 <body>
 
 <header class="top">
-  <div class="logo">⚡</div>
+  <img class="logo" src="/icon.svg" width="34" height="34" alt="COINMASTER BYBIT 앱 아이콘">
   <div class="brand"><b>COINMASTER ◆ BYBIT</b><br>
     <span class="sub">BTC · USDT PERP · 15m/1h 추세돌파 · 레버리지 마진</span></div>
   <div class="mid">5EMA · BOX BREAKOUT · ATR · 2R · 애드업 &nbsp;—&nbsp; <b>PHASE 1 PAPER</b></div>
