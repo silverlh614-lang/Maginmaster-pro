@@ -347,6 +347,7 @@
       <div class="pbody">
         <div class="row"><span class="l">소스</span><span class="v" id="fSrc">–</span></div>
         <div class="row"><span class="l">현재가</span><span class="v" id="fPx">–</span></div>
+        <div class="row"><span class="l">교차검증</span><span class="v" id="fCross">–</span></div>
         <div class="row"><span class="l">ATR(14)</span><span class="v" id="fAtr">–</span></div>
         <div class="row"><span class="l">진입봉/상위봉</span><span class="v" id="fBars">–</span></div>
         <div class="row"><span class="l">폴 횟수</span><span class="v" id="fPolls">0</span></div>
@@ -599,6 +600,10 @@ async function refresh(){
   // data feed
   $("fSrc").textContent=col.source||"–";
   $("fPx").textContent=px!=null?fmt(px,2):"–";
+  const fc=$("fCross");
+  if(col.cross_dev_pct==null){fc.textContent=col.source&&col.source!=="none"?"단일 소스":"–";fc.className="v muted";}
+  else{fc.textContent=(col.divergence?"⚠ ":"✓ ")+col.cross_source+" Δ"+fmt(col.cross_dev_pct,2)+"%";
+    fc.className="v"+(col.divergence?" neg":"");}
   $("fAtr").textContent=dg&&dg.atr!=null?fmt(dg.atr,2):"–";
   $("fBars").textContent=(col.entry_bars||0)+" / "+(col.htf_bars||0);
   $("fPolls").textContent=col.polls||0;$("fErr").textContent=col.last_error||"없음";

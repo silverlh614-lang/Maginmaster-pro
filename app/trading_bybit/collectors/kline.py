@@ -22,6 +22,12 @@ BINANCE_REST = "https://fapi.binance.com/fapi/v1/klines"
 OKX_REST = "https://www.okx.com/api/v5/market/candles"
 MAX_BARS = 400          # rolling history kept per interval
 
+# Cross-source price validation: every N polls, compare the live source's
+# latest price against a second venue; a gap beyond the threshold flags the
+# feed as untrustworthy (bad tick / stuck source) so the operator can react.
+CROSS_CHECK_EVERY = 15          # polls (~30s at a 2s poll)
+MAX_SOURCE_DEV_PCT = 0.8        # % gap between venues that raises a warning
+
 # Bybit interval code (minutes as string / D,W,M) -> other venues' bar strings.
 _BINANCE_IV = {"1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
                "60": "1h", "120": "2h", "240": "4h", "360": "6h",
@@ -51,6 +57,10 @@ class KlineCollector:
         self.source = "none"
         self.last_error = ""
         self._polls = 0
+        # cross-source validation state (advisory — never blocks the feed)
+        self.cross_source = ""
+        self.cross_dev_pct: float | None = None
+        self.divergence = False
         # Source failover order. Testnet only exists on Bybit, so pin to it.
         if testnet:
             self._bybit_url = BYBIT_TESTNET_REST
@@ -103,9 +113,10 @@ class KlineCollector:
     # ------------------------------------------------------- source adapters
     # Each returns a list[Candle] (any order) or raises on failure.
 
-    async def _src_bybit(self, client: httpx.AsyncClient, interval: str) -> list[Candle]:
+    async def _src_bybit(self, client: httpx.AsyncClient, interval: str,
+                         limit: int | None = None) -> list[Candle]:
         params = {"category": "linear", "symbol": self.symbol,
-                  "interval": interval, "limit": self.limit}
+                  "interval": interval, "limit": limit or self.limit}
         r = await client.get(self._bybit_url, params=params)
         r.raise_for_status()
         d = r.json()
@@ -116,13 +127,14 @@ class KlineCollector:
                        low=float(x[3]), close=float(x[4]), volume=float(x[5]))
                 for x in d.get("result", {}).get("list", [])]
 
-    async def _src_binance(self, client: httpx.AsyncClient, interval: str) -> list[Candle]:
+    async def _src_binance(self, client: httpx.AsyncClient, interval: str,
+                          limit: int | None = None) -> list[Candle]:
         iv = _BINANCE_IV.get(interval)
         if iv is None:
             raise RuntimeError(f"unsupported interval {interval}")
         r = await client.get(BINANCE_REST,
                              params={"symbol": self.symbol, "interval": iv,
-                                     "limit": self.limit})
+                                     "limit": limit or self.limit})
         r.raise_for_status()
         rows = r.json()
         if not isinstance(rows, list):
@@ -132,13 +144,15 @@ class KlineCollector:
                        low=float(x[3]), close=float(x[4]), volume=float(x[5]))
                 for x in rows]
 
-    async def _src_okx(self, client: httpx.AsyncClient, interval: str) -> list[Candle]:
+    async def _src_okx(self, client: httpx.AsyncClient, interval: str,
+                      limit: int | None = None) -> list[Candle]:
         iv = _OKX_IV.get(interval)
         if iv is None:
             raise RuntimeError(f"unsupported interval {interval}")
         inst = f"{_base_of(self.symbol)}-USDT-SWAP"
         r = await client.get(OKX_REST,
-                             params={"instId": inst, "bar": iv, "limit": self.limit})
+                             params={"instId": inst, "bar": iv,
+                                     "limit": limit or self.limit})
         r.raise_for_status()
         d = r.json()
         if str(d.get("code", "0")) != "0":
@@ -165,6 +179,8 @@ class KlineCollector:
                 self.source = name
                 self.last_error = ""
                 self._polls += 1
+                if self._polls % CROSS_CHECK_EVERY == 0:
+                    await self._cross_check(client)
                 return
             except asyncio.CancelledError:
                 raise
@@ -172,6 +188,33 @@ class KlineCollector:
                 errors.append(f"{name}: {type(e).__name__}: {str(e)[:50]}")
         self.source = "none"
         raise RuntimeError(" | ".join(errors) or "no sources configured")
+
+    async def _cross_check(self, client: httpx.AsyncClient) -> None:
+        """Compare the live source's latest price with a second venue. Advisory
+        only: sets divergence/cross_* fields, never rejects data or raises."""
+        mine = self.last_price()
+        if mine is None or mine <= 0:
+            return
+        for name, fn in self._sources:
+            if name == self.source:
+                continue
+            try:
+                bars = await fn(client, self.entry_interval, 2)
+                other = sorted(bars, key=lambda c: c.ts_ms)[-1].close if bars else None
+                if other and other > 0:
+                    dev = abs(mine - other) / other * 100.0
+                    self.cross_source = name
+                    self.cross_dev_pct = round(dev, 3)
+                    self.divergence = dev > MAX_SOURCE_DEV_PCT
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:                       # noqa: BLE001 — advisory only
+                continue
+        # no second venue reachable — can't cross-check
+        self.cross_source = ""
+        self.cross_dev_pct = None
+        self.divergence = False
 
     async def run(self, stop: asyncio.Event, poll_sec: float = 2.0) -> None:
         """Poll until stopped; never raises out."""
@@ -204,4 +247,7 @@ class KlineCollector:
             "last_price": self.last_price(),
             "polls": self._polls,
             "last_error": self.last_error,
+            "cross_source": self.cross_source,
+            "cross_dev_pct": self.cross_dev_pct,
+            "divergence": self.divergence,
         }

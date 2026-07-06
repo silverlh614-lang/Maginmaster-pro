@@ -323,6 +323,40 @@ def test_kline_source_failover():
     print("ok  kline source failover (bybit->binance->okx)")
 
 
+def test_kline_cross_validation():
+    """The live source's price is cross-checked against a second venue; a gap
+    beyond the threshold flags divergence. No network — MockTransport."""
+    import asyncio
+    import httpx
+    from app.trading_bybit.collectors.kline import KlineCollector
+    from app.trading_bybit.models import Candle
+
+    def make_client(binance_last):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.host == "fapi.binance.com":
+                return httpx.Response(200, json=[[1_700_000_000_000, "1", "1",
+                    "1", str(binance_last), "1", 1, "0", 0, "0", "0", "0"]])
+            return httpx.Response(403)      # bybit/okx unreachable here
+        return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    async def run(binance_last):
+        col = KlineCollector("BTCUSDT", "15", "60")
+        col.source = "bybit"                        # pretend bybit is live
+        col._forming["15"] = Candle(1, 1, 1, 1, 63000.0, 1)   # my price = 63000
+        async with make_client(binance_last) as client:
+            await col._cross_check(client)
+        return col
+
+    # 63700 vs 63000 -> ~1.1% gap > 0.8% threshold -> divergence
+    c = asyncio.run(run(63700.0))
+    assert c.cross_source == "binance" and c.divergence, c.status()
+    assert c.cross_dev_pct > 0.8, c.cross_dev_pct
+    # 63020 vs 63000 -> ~0.03% -> agrees, no divergence
+    c = asyncio.run(run(63020.0))
+    assert c.cross_source == "binance" and not c.divergence, c.status()
+    print("ok  kline cross-source validation (divergence flag)")
+
+
 def test_state_persistence():
     """Equity + a live open position must round-trip through PositionStore so a
     trade in progress and the 복리 equity survive a restart/redeploy."""
@@ -380,5 +414,6 @@ if __name__ == "__main__":
     test_backtest_replay()
     test_candles_export()
     test_kline_source_failover()
+    test_kline_cross_validation()
     test_state_persistence()
     print("\nall bybit tests passed ✅")
