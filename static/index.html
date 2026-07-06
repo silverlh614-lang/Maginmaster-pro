@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Coinmaster Pro — BTC 사이클 바닥 모델</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>₿</text></svg>">
+<style>
+  :root {
+    --bg: #0f1115; --surface: #171a21; --border: #262b36;
+    --ink: #e8eaf0; --ink-2: #9aa3b2; --ink-3: #6b7382;
+    --accent: #f7931a; --accent-dim: #b96f14;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.6 -apple-system, "Segoe UI", "Noto Sans KR", sans-serif;
+  }
+  /* ---- top bar + tabs ---- */
+  .topbar {
+    position: sticky; top: 0; z-index: 20; background: rgba(15,17,21,.95);
+    backdrop-filter: blur(6px); border-bottom: 1px solid var(--border);
+  }
+  .topbar-in { max-width: 1080px; margin: 0 auto; padding: 10px 20px 0; }
+  .brand { font-size: 17px; font-weight: 800; }
+  .brand .sub { color: var(--ink-3); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  nav.tabs { display: flex; gap: 2px; margin-top: 8px; overflow-x: auto; scrollbar-width: none; }
+  nav.tabs::-webkit-scrollbar { display: none; }
+  nav.tabs a {
+    padding: 9px 14px; color: var(--ink-2); text-decoration: none; font-size: 14px;
+    border-bottom: 2px solid transparent; white-space: nowrap; border-radius: 6px 6px 0 0;
+  }
+  nav.tabs a:hover { color: var(--ink); background: #171a21; }
+  nav.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 700; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 22px 20px 60px; }
+  .panel[hidden] { display: none; }
+  .disclaimer { font-size: 12.5px; color: var(--ink-3); }
+  h2 { font-size: 16px; margin: 26px 0 12px; color: var(--ink); }
+  .panel > h2:first-child { margin-top: 4px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .tile {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .tile .label { font-size: 12px; color: var(--ink-2); letter-spacing: .02em; }
+  .tile .value { font-size: 22px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tile .sub { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px;
+  }
+  .chart-img { width: 100%; height: auto; border-radius: 6px; background: #fff; }
+  .prob-row { display: grid; grid-template-columns: 110px 1fr 64px; gap: 10px; align-items: center; margin: 8px 0; }
+  .prob-label { color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .prob-track { background: #10131a; border-radius: 4px; height: 14px; overflow: hidden; }
+  .prob-fill { background: var(--accent); height: 100%; border-radius: 4px 3px 3px 4px; min-width: 2px; }
+  .prob-val { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  th { color: var(--ink-2); font-weight: 600; font-size: 12.5px; }
+  .scroll { overflow-x: auto; }
+  .badge {
+    display: inline-block; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid var(--border); font-size: 12px; color: var(--ink);
+    background: #10131a;
+  }
+  .badge::before { margin-right: 5px; }
+  .badge.watch::before { content: "👁"; }
+  .badge.cap_watch::before { content: "⚠️"; }
+  .badge.accumulate::before { content: "🪜"; }
+  .badge.confirm::before { content: "✅"; }
+  .badge.trend::before { content: "📈"; }
+  form.fsm { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
+  form.fsm label { font-size: 12px; color: var(--ink-2); display: block; }
+  form.fsm input[type=number] {
+    width: 100%; background: #10131a; color: var(--ink); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 9px; font: inherit; font-size: 13.5px;
+  }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--ink-2); padding-top: 18px; }
+  .btns { grid-column: 1 / -1; display: flex; gap: 10px; }
+  button {
+    background: var(--accent); color: #1a1206; border: 0; border-radius: 7px;
+    padding: 9px 16px; font: inherit; font-weight: 700; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--border); }
+  button:hover { filter: brightness(1.08); }
+  #fsm-result { margin-top: 14px; font-size: 14px; }
+  .muted { color: var(--ink-3); font-size: 12.5px; }
+  .tldr { border-left: 3px solid var(--accent); margin-top: 4px; line-height: 1.75; }
+  .tldr b { color: var(--accent); }
+  .intro { color: var(--ink-2); font-size: 13.5px; margin: -4px 0 12px; }
+  details.explain {
+    margin-top: 10px; background: #10131a; border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; font-size: 13.5px; color: var(--ink-2);
+  }
+  details.explain summary { cursor: pointer; color: var(--accent); font-weight: 600; font-size: 13px; }
+  details.explain b { color: var(--ink); }
+  details.explain li { margin: 5px 0; }
+  footer { margin-top: 44px; color: var(--ink-3); font-size: 12.5px; border-top: 1px solid var(--border); padding-top: 14px; }
+  a { color: var(--accent); }
+
+  /* ---------------- mobile ---------------- */
+  @media (max-width: 640px) {
+    body { font-size: 14px; }
+    .topbar-in { padding: 8px 12px 0; }
+    .brand { font-size: 15px; }
+    .brand .sub { display: none; }
+    nav.tabs a { padding: 9px 11px; font-size: 13.5px; }
+    .wrap { padding: 14px 12px 50px; }
+    .tiles { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .tile { padding: 11px 12px; }
+    .tile .value { font-size: 17px; }
+    h2 { font-size: 15px; margin: 22px 0 10px; }
+    .card { padding: 14px; }
+    .prob-row { grid-template-columns: 84px 1fr 52px; gap: 7px; }
+    .prob-row[style] { grid-template-columns: 1fr 60px !important; }
+    .prob-row[style] .prob-track { display: none; }
+    form.fsm { grid-template-columns: repeat(2, 1fr); }
+    .btns { flex-wrap: wrap; }
+    .btns button { flex: 1; min-width: 110px; padding: 11px 8px; }
+    .tldr { line-height: 1.85; font-size: 13.5px; }
+  }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div class="topbar-in">
+    <div class="brand">₿ Coinmaster Pro <span class="sub">BTC 사이클 바닥 모델 + Bybit 트레이더</span></div>
+    <nav class="tabs" id="tabs">
+      <a href="/">🎛️ Bybit 관제탑</a>
+      <a href="#home" data-tab="home">개요</a>
+      <a href="#part1" data-tab="part1">바닥 분포</a>
+      <a href="#part2" data-tab="part2">매수 신호기</a>
+      <a href="#part3" data-tab="part3">사이클 전망</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ============================== 개요 ============================== -->
+  <section class="panel" id="panel-home">
+    <p class="intro" style="margin-top:0">이 하락장의 바닥이 어디쯤일지(바닥 분포), 언제 얼마나 나눠 살지(매수 신호기),
+      다음 고점은 언제·얼마일지(사이클 전망)를 계산하고, Bybit 레버리지 추세돌파 봇(관제탑)을 운영하는 대시보드.</p>
+    <p class="disclaimer">⚠️ 모든 수치는 예측이 아닌 <b>구조화된 의견</b>이며 투자 조언이 아닙니다. [SNAPSHOT] 값은 재검증 필요.</p>
+
+    <div class="card tldr" id="tldr">요약 계산 중…</div>
+
+    <h2>지금 시장 상황 <span class="muted" id="snap-date"></span></h2>
+    <p class="intro">모델이 기준으로 삼는 4개의 핵심 가격입니다.</p>
+    <div class="tiles" id="snapshot-tiles"></div>
+    <details class="explain"><summary>이 가격들이 왜 중요한가요?</summary>
+      <ul>
+        <li><b>실현가격</b> = 비트코인을 가진 모든 사람의 평균 매수 단가. 역사적으로 큰 하락은 이 근처(또는 약간 아래)에서 멈췄습니다. 그래서 "결정적 선"이라 부릅니다.</li>
+        <li><b>200주 이동평균</b> = 지난 약 4년간의 평균 가격. 과거 사이클의 바닥이 거의 항상 이 선 근처에서 형성됐습니다.</li>
+        <li>지금 가격이 이 두 선 사이/근처에 있다는 것은 <b>"바닥권일 수도 있는 구간"</b>에 들어와 있다는 뜻입니다.</li>
+      </ul>
+    </details>
+  </section>
+
+  <!-- ============================== Part 1 ============================== -->
+  <section class="panel" id="panel-part1" hidden>
+    <h2>Part 1 — 바닥은 어디쯤일까? (30만 번 시뮬레이션)</h2>
+    <p class="intro">"이번 하락의 최저점이 얼마일까?"를 6가지 서로 다른 관점으로 30만 번 계산한 결과입니다.
+      아래 그래프에서 <b>막대가 높은 가격대일수록 바닥이 될 가능성을 높게 본다</b>는 뜻입니다.</p>
+    <div class="tiles" id="summary-tiles"></div>
+    <div class="card" style="margin-top:12px">
+      <img class="chart-img" src="/api/distribution.png" alt="바닥 가격 시뮬레이션 결과 — 막대가 높을수록 그 가격이 바닥일 가능성이 높음" loading="lazy">
+      <p class="muted">봉우리가 두 개인 이유: <b>얕은 바닥($50~55k) 시나리오 약 75%</b> vs <b>깊은 폭락($28~33k) 시나리오 약 25%</b> —
+        둘 중 하나로 갈 가능성이 크고 그 사이($33~40k)에서 멈출 가능성은 낮게 본다는 의미입니다.</p>
+    </div>
+    <details class="explain"><summary>P50, P5–P95 같은 표기가 뭔가요?</summary>
+      <ul>
+        <li><b>중앙값(P50)</b>: 시나리오를 반으로 가르는 값. 절반은 이보다 낮은 바닥, 절반은 높은 바닥.</li>
+        <li><b>P5–P95 (90% 범위)</b>: 100번 중 90번은 바닥이 이 사이에 있다고 보는 범위.</li>
+        <li><b>6가지 관점</b>: ①평균 매수단가 지지 ②200주선 지지 ③하락폭이 매 사이클 완만해지는 추세 ④과거 바닥의 저평가 신호(MVRV) ⑤하락 추세 마지막 급락 패턴 ⑥과거 -77~85% 폭락 반복 — 각각에 신뢰도 가중치를 두고 섞습니다.</li>
+      </ul>
+    </details>
+
+    <h2>바닥이 특정 가격 아래로 내려갈 확률</h2>
+    <p class="intro">예: 72.9%는 "열 번 중 일곱 번은 바닥이 $53,600(평균 매수단가)보다 아래"라고 본다는 뜻입니다.</p>
+    <div class="card" id="prob-card"></div>
+  </section>
+
+  <!-- ============================== Part 2 ============================== -->
+  <section class="panel" id="panel-part2" hidden>
+    <h2>Part 2 — 언제 얼마나 살지 정해주는 신호기</h2>
+    <p class="intro">바닥을 정확히 맞히는 대신, <b>감정 배제하고 규칙대로 5번에 나눠 사는 것</b>이 이 신호기의 목적입니다:
+      가격이 평균 매수단가 아래로 → <b>준비</b> → 더 싸지면 <b>1/5씩 매수</b> → 회복 신호가 확인되면 <b>남은 금액 투입</b> → 상승 추세로 <b>인계</b>.</p>
+    <div class="card">
+      <p>현재 단계: <span id="fsm-phase" class="badge watch">…</span>
+         <span class="muted" id="fsm-meta"></span></p>
+      <p class="muted">매일 시장 데이터를 입력하면 "오늘 자금의 몇 %를 투입할지"를 알려줍니다.
+        실현가격/200주선을 비우면 위의 기준값을 그대로 사용합니다.</p>
+      <form class="fsm" id="fsm-form">
+        <div><label>가격 (USD)</label><input type="number" name="price" step="any" required value="61500"></div>
+        <div><label>실현가격 (선택)</label><input type="number" name="realized_price" step="any" placeholder="스냅샷 사용"></div>
+        <div><label>MVRV Z-Score</label><input type="number" name="mvrv_z" step="any" required value="0.5"></div>
+        <div><label>200주선 (선택)</label><input type="number" name="ma_200w" step="any" placeholder="스냅샷 사용"></div>
+        <div><label>LTH-MVRV</label><input type="number" name="lth_mvrv" step="any" required value="1.2"></div>
+        <div><label>STH-MVRV</label><input type="number" name="sth_mvrv" step="any" required value="1.0"></div>
+        <div class="check"><input type="checkbox" name="made_new_low" id="mnl"><label for="mnl" style="display:inline">오늘 신저점</label></div>
+        <div class="btns">
+          <button type="submit">일별 업데이트</button>
+          <button type="button" class="ghost" id="fsm-reset">상태 리셋</button>
+          <button type="button" class="ghost" id="fsm-demo">데모 경로 실행</button>
+        </div>
+      </form>
+      <div id="fsm-result"></div>
+      <div class="scroll" id="fsm-demo-table"></div>
+      <details class="explain"><summary>입력값들이 뭔가요? (MVRV 등)</summary>
+        <ul>
+          <li><b>MVRV Z-Score</b>: 지금 가격이 시장 평균 매수단가 대비 얼마나 비싼지/싼지 나타내는 지표. <b>0 아래 = 저평가 구간</b>, 과거 바닥들은 대략 -0.5~0에서 나왔습니다. Glassnode 등에서 무료로 볼 수 있습니다.</li>
+          <li><b>LTH-MVRV / STH-MVRV</b>: 장기 보유자/단기 보유자의 평균 수익률. <b>장기 보유자 수익률이 단기를 역전(LTH &gt; STH)하면</b> 역사적으로 바닥·상승장 시작 신호였습니다.</li>
+          <li><b>오늘 신저점</b>: 이번 하락에서 가장 낮은 가격을 오늘 새로 찍었는지. 신저점마다 1/5씩 매수하는 방식이라 <b>정확한 바닥을 몰라도 평균 단가가 바닥 근처에 형성</b>됩니다.</li>
+          <li><b>데모 경로 실행</b>: 가짜 데이터(하락→회복)로 신호기가 어떻게 작동하는지 구경하는 버튼입니다. 실제 상태에는 영향이 없습니다.</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <!-- ============================== Part 3 ============================== -->
+  <section class="panel" id="panel-part3" hidden>
+    <h2>Part 3 — 바닥 다음엔? (2028 반감기 → 2029 고점 전망)</h2>
+    <p class="intro">바닥 이후 이야기를 이어서 계산합니다: 바닥에서 회복 → 2028년 4월 반감기 → 2029년쯤 다음 고점.
+      단계를 거칠수록 불확실성이 커지므로 <b>범위가 점점 넓어지는 것이 정상</b>입니다.</p>
+    <div class="tiles" id="chain-tiles"></div>
+    <div class="card" style="margin-top:12px">
+      <img class="chart-img" src="/api/chain.png" alt="왼쪽: 2028년 반감기 때 가격 전망, 오른쪽: 2029년 고점 전망. 빨간 점선이 기존 최고가 $126k" loading="lazy">
+      <p class="muted">왼쪽 = 2028년 반감기 날 가격, 오른쪽 = 2029년 고점. 빨간 점선(구 최고가 $126k)보다 오른쪽 면적이 클수록 신고가 경신 가능성이 높다고 보는 것.</p>
+    </div>
+    <div class="card" style="margin-top:12px" id="chain-prob-card"></div>
+    <details class="explain"><summary>반감기가 뭐고 왜 2029년 고점인가요?</summary>
+      <ul>
+        <li><b>반감기</b>: 4년마다 비트코인 신규 발행량이 절반으로 줄어드는 이벤트. 다음은 2028년 4월경.</li>
+        <li>과거 3번의 사이클 모두 <b>반감기 후 약 17~18개월 뒤에 고점</b>이 왔습니다 → 2029년 가을 근처로 추정.</li>
+        <li>단, 사이클마다 수익 배수가 약 1/3.7로 줄어드는 추세라(96배→30배→7.9배→2배), 이번엔 <b>"큰 랠리 자체가 안 올 확률 30%"</b>도 계산에 섞었습니다.</li>
+      </ul>
+    </details>
+  </section>
+
+  <footer>
+    상태기계: WATCH → CAPITULATION_WATCH → ACCUMULATE → CONFIRM → TREND ·
+    지식 베이스 원문: <a href="/api/knowledge">/api/knowledge</a> ·
+    API 문서: <a href="/docs">/docs</a>
+  </footer>
+</div>
+
+<script>
+/* ---------------- tab router (hash-based, back button works) ------------ */
+const TABS = ["home", "part1", "part2", "part3"];
+function showTab() {
+  let t = location.hash.replace("#", "") || "home";
+  if (!TABS.includes(t)) t = "home";
+  TABS.forEach(x => {
+    document.getElementById("panel-" + x).hidden = (x !== t);
+  });
+  document.querySelectorAll("#tabs a[data-tab]").forEach(a =>
+    a.classList.toggle("active", a.dataset.tab === t));
+  window.scrollTo(0, 0);
+}
+window.addEventListener("hashchange", showTab);
+showTab();
+
+/* ---------------- data loading (unchanged logic) ------------------------ */
+const fmt$ = v => "$" + Math.round(v).toLocaleString("en-US");
+const pct = v => (v * 100).toFixed(1) + "%";
+const PHASE_KO = { watch: "관망 WATCH", cap_watch: "캐피튤레이션 감시", accumulate: "사다리 매집", confirm: "바닥 확인", trend: "추세 인계" };
+
+function tile(label, value, sub) {
+  return `<div class="tile"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+}
+
+const state = {};
+
+async function loadSnapshot() {
+  const s = await (await fetch("/api/snapshot")).json();
+  state.snap = s;
+  document.getElementById("snap-date").textContent = "[SNAPSHOT " + s.snapshot_date + "]";
+  document.getElementById("snapshot-tiles").innerHTML =
+    `<div class="tile"><div class="label">지금 가격 <span id="spot-live"></span></div>
+       <div class="value" id="spot-value">${fmt$(s.spot)}</div>
+       <div class="sub" id="spot-sub">최고가 대비 ${(s.drawdown_from_ath * 100).toFixed(1)}%</div></div>` +
+    tile("시장 평균 매수단가", fmt$(s.realized_price), "실현가격 — 지켜지느냐가 핵심 (결정적 선)") +
+    tile("최근 4년 평균 가격", fmt$(s.ma_200w), "200주 이동평균 — 역대 바닥이 이 근처") +
+    tile("사상 최고가", fmt$(s.ath), "2025년 10월");
+}
+
+const SRC_KO = { coingecko: "CoinGecko", coinbase: "Coinbase", binance: "Binance" };
+async function refreshPrice() {
+  try {
+    const p = await (await fetch("/api/price")).json();
+    document.getElementById("spot-value").textContent = fmt$(p.price);
+    const t = new Date(p.fetched_at);
+    const hhmm = String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+    document.getElementById("spot-live").textContent = p.live ? "· LIVE" : "· 스냅샷";
+    document.getElementById("spot-sub").textContent =
+      `ATH 대비 ${(p.drawdown_from_ath * 100).toFixed(1)}% · ` +
+      (p.live ? `${SRC_KO[p.source] || p.source} ${hhmm} 갱신` : "실시간 피드 불가 — 스냅샷 값");
+    const priceInput = document.querySelector('#fsm-form input[name=price]');
+    if (priceInput && document.activeElement !== priceInput) priceInput.value = Math.round(p.price);
+  } catch (e) { /* keep last shown value */ }
+}
+setInterval(refreshPrice, 60_000);
+
+async function loadSimulation() {
+  const r = await (await fetch("/api/simulate")).json();
+  const s = r.summary, p = s.percentiles;
+  state.sim = s;
+  document.getElementById("summary-tiles").innerHTML =
+    tile("바닥 중앙값", fmt$(s.median), "시나리오 절반은 이보다 아래 (P50)") +
+    tile("바닥 평균값", fmt$(s.mean), "전체 시나리오 평균 (EV)") +
+    tile("90% 시나리오 범위", fmt$(p["5"]) + " – " + fmt$(p["95"]), "100번 중 90번은 이 사이 (P5–P95)") +
+    tile("중간 50% 범위", fmt$(p["25"]) + " – " + fmt$(p["75"]), "P25–P75") +
+    tile("계산 횟수", s.n.toLocaleString() + "회");
+  const rows = Object.entries(s.prob_below)
+    .sort((a, b) => Number(b[0]) - Number(a[0]))
+    .map(([L, v]) => {
+      const label = Number(L) === 53600 ? fmt$(L) + " ★" : fmt$(L);
+      return `<div class="prob-row"><div class="prob-label">&lt; ${label}</div>
+        <div class="prob-track"><div class="prob-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
+        <div class="prob-val">${pct(v)}</div></div>`;
+    }).join("");
+  document.getElementById("prob-card").innerHTML =
+    rows + `<p class="muted">★ = 시장 평균 매수단가. 이 확률이 높다는 것은 "한 번쯤은 평균 단가 아래로 찍고 내려갔다 올 가능성이 크다"고 본다는 뜻입니다.</p>`;
+}
+
+async function loadChain() {
+  const r = await (await fetch("/api/chain")).json();
+  const s = r.summary, ath = r.snapshot.ath;
+  state.chain = s;
+  document.getElementById("chain-tiles").innerHTML =
+    tile("2028 반감기 때 예상가", fmt$(s.halving_price["50"]), "중앙값 · 2028-04-20 기준") +
+    tile("반감기 중간 50% 범위", fmt$(s.halving_price["25"]) + " – " + fmt$(s.halving_price["75"])) +
+    tile("2029 고점 예상가", fmt$(s.top["50"]), "중앙값") +
+    tile("고점 중간 50% 범위", fmt$(s.top["25"]) + " – " + fmt$(s.top["75"])) +
+    tile("고점 예상 시기", s.top_date["50"], s.top_date["25"] + " ~ " + s.top_date["75"]);
+  const P = s.prob;
+  const rows = [
+    ["반감기 때 이미 신고가일 확률", P.halving_above_old_ath],
+    ["다음 고점이 신고가($126k 초과)일 확률", P.top_above_old_ath],
+    ["고점이 $200,000 넘을 확률", P.top_above_200k],
+    ["고점이 $300,000 넘을 확률", P.top_above_300k],
+    ["고점이 $500,000 넘을 확률", P.top_above_500k],
+    ["랠리가 아예 실패할 확률", P.rally_fails],
+  ].map(([label, v]) =>
+    `<div class="prob-row" style="grid-template-columns:240px 1fr 64px">
+       <div class="prob-label">${label}</div>
+       <div class="prob-track"><div class="prob-fill" style="width:${(v * 100).toFixed(1)}%"></div></div>
+       <div class="prob-val">${pct(v)}</div></div>`).join("");
+  document.getElementById("chain-prob-card").innerHTML = rows +
+    `<p class="muted">과거 사이클의 수익 배수가 매번 약 1/3.7씩 줄어왔기 때문에(96배→30배→7.9배→2배),
+      "이번엔 큰 랠리가 아예 없을 수도 있다"는 시나리오를 30% 섞어 계산했습니다.</p>`;
+}
+
+function renderPhase(state) {
+  const el = document.getElementById("fsm-phase");
+  el.textContent = PHASE_KO[state.phase] || state.phase;
+  el.className = "badge " + state.phase;
+  document.getElementById("fsm-meta").textContent =
+    ` 트랜치 ${state.fired}/${state.ladder_tranches} 투입` + (state.low ? ` · 관측 저점 ${fmt$(state.low)}` : "");
+}
+
+async function loadFsm() {
+  const st = await (await fetch("/api/fsm/state")).json();
+  state.fsm = st;
+  renderPhase(st);
+}
+
+function buildTldr() {
+  const { snap, sim, chain, fsm } = state;
+  if (!snap || !sim || !chain) return;
+  const dd = Math.abs(snap.drawdown_from_ath * 100).toFixed(0);
+  const p = sim.percentiles;
+  const phase = fsm ? (PHASE_KO[fsm.phase] || fsm.phase) : "관망";
+  document.getElementById("tldr").innerHTML = `
+    <b>한눈에 요약</b> — 지금 비트코인은 ${fmt$(snap.spot)}, 최고가(${fmt$(snap.ath)})에서 약 ${dd}% 내려온 상태입니다.<br>
+    ① <b>바닥은 어디?</b> 이번 하락의 최저점을 ${fmt$(sim.median)} 근처로 봅니다 (90% 확률로 ${fmt$(p["5"])}~${fmt$(p["95"])} 사이).
+       시점은 과거 패턴(고점 후 약 370일)상 <b>2026년 4분기 근처</b>. → <a href="#part1">바닥 분포 탭</a><br>
+    ② <b>그래서 뭘 하나?</b> 바닥을 점찍어 맞히는 대신 신호기가 시키는 대로 <b>5번에 나눠 매수</b>합니다.
+       현재 단계: <b>${phase}</b>. → <a href="#part2">매수 신호기 탭</a><br>
+    ③ <b>바닥 다음은?</b> 2028년 반감기를 지나 <b>${chain.top_date["50"].slice(0, 7).replace("-", "년 ")}월쯤</b>
+       ${fmt$(chain.top["50"])} 근처의 고점을 봅니다 (신고가 경신 확률 ${pct(chain.prob.top_above_old_ath)}). → <a href="#part3">사이클 전망 탭</a><br>
+    ④ <b>레버리지 봇은?</b> Bybit 추세돌파 페이퍼 봇이 ATR 기반 리스크 규율로 돌아갑니다. → <a href="/">🎛️ Bybit 관제탑</a><br>
+    <span class="muted">※ 예측이 아니라 "가정을 넣으면 답이 나오는 계산기"입니다. 가정을 바꾸면 답도 바뀌며, 투자 조언이 아닙니다.</span>`;
+}
+
+document.getElementById("fsm-form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const f = new FormData(e.target), body = {};
+  for (const k of ["price", "realized_price", "mvrv_z", "ma_200w", "lth_mvrv", "sth_mvrv"]) {
+    const v = f.get(k);
+    if (v !== null && v !== "") body[k] = Number(v);
+  }
+  body.made_new_low = f.get("made_new_low") === "on";
+  const r = await (await fetch("/api/fsm/update", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  })).json();
+  renderPhase(r.state);
+  document.getElementById("fsm-result").innerHTML =
+    `금일 투입 비율: <b>${pct(r.deploy_fraction)}</b> · 누적 투입: <b>${pct(r.cum_deployed)}</b>
+     <span class="muted">flags: ${Object.entries(r.flags).map(([k, v]) => k + "=" + (v ? "✔" : "✘")).join(" · ")}</span>`;
+});
+
+document.getElementById("fsm-reset").addEventListener("click", async () => {
+  renderPhase(await (await fetch("/api/fsm/reset", { method: "POST" })).json());
+  document.getElementById("fsm-result").textContent = "상태를 초기화했습니다.";
+  document.getElementById("fsm-demo-table").innerHTML = "";
+});
+
+document.getElementById("fsm-demo").addEventListener("click", async () => {
+  const r = await (await fetch("/api/fsm/demo")).json();
+  const rows = r.rows.filter(x => x.deploy_fraction > 0 || ["confirm", "trend"].includes(x.phase));
+  document.getElementById("fsm-demo-table").innerHTML =
+    `<p class="muted" style="margin-top:14px">합성 하락→회복 경로 데모 (실제 FSM 상태에는 영향 없음):</p>
+     <table><thead><tr><th>일차</th><th>가격</th><th>phase</th><th>투입</th><th>누적</th></tr></thead><tbody>` +
+    rows.map(x => `<tr><td>d${String(x.day).padStart(2, "0")}</td><td>${fmt$(x.price)}</td>
+      <td>${PHASE_KO[x.phase] || x.phase}</td><td>${pct(x.deploy_fraction)}</td><td>${pct(x.cum_deployed)}</td></tr>`).join("") +
+    `</tbody></table>`;
+});
+
+Promise.all([loadSnapshot().then(refreshPrice), loadSimulation(), loadChain(), loadFsm()]).then(buildTldr);
+</script>
+</body>
+</html>

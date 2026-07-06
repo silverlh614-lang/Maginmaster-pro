@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="22" fill="#0f1115"/>
+  <rect width="100" height="100" rx="22" fill="none" stroke="#262b36" stroke-width="2"/>
+  <text x="50" y="68" font-size="52" text-anchor="middle"
+        font-family="-apple-system, 'Segoe UI', sans-serif" font-weight="800"
+        fill="#f7931a">₿</text>
+</svg>
