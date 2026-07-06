@@ -303,3 +303,17 @@ def manifest():
 @app.get("/icon.svg")
 def icon():
     return FileResponse(ROOT / "static" / "icon.svg", media_type="image/svg+xml")
+
+
+# PWA / home-screen icons (Android manifest icons + iOS apple-touch-icon).
+_PWA_ICONS = ("icon-192.png", "icon-512.png", "icon-maskable-512.png",
+              "apple-touch-icon.png")
+
+
+@app.get("/{name}.png")
+def png_icon(name: str):
+    """Serve the home-screen icon PNGs from static/ (allow-listed only)."""
+    fname = f"{name}.png"
+    if fname not in _PWA_ICONS:
+        raise HTTPException(404, "not found")
+    return FileResponse(ROOT / "static" / fname, media_type="image/png")
