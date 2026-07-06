@@ -1,11 +1,12 @@
-"""@responsibility 캔들 수집기 — Bybit v5 공개 kline REST 폴링으로 진입·상위 시간봉 OHLCV 유지 (인증 불필요)
+"""@responsibility 캔들 수집기 — Bybit→Binance→OKX 공개 kline REST 폴백으로 진입·상위 시간봉 OHLCV 유지 (인증 불필요)
 
-Candle collector. Polls Bybit's PUBLIC v5 kline REST endpoint (no API key)
-for both the entry and higher timeframes and keeps a deduped, time-sorted
-buffer of CLOSED candles per interval. This is the package's single market-
-data channel — strategy and backtest see identical Candle objects. The
-newest returned bar is still forming, so it is exposed as last_price but
-excluded from the closed-candle list the strategy consumes.
+Candle collector. Polls a PUBLIC v5/kline-style REST endpoint (no API key) for
+both the entry and higher timeframes and keeps a deduped, time-sorted buffer of
+CLOSED candles per interval. Bybit is the primary source; if it is unreachable
+(some regions geo-block api.bybit.com), it fails over to Binance USDⓈ-M futures
+and then OKX swaps so the live chart and strategy keep receiving identical
+Candle objects. The newest returned bar is still forming, so it is exposed as
+last_price but excluded from the closed-candle list the strategy consumes.
 """
 from __future__ import annotations
 
@@ -17,7 +18,22 @@ from ..models import Candle
 
 BYBIT_REST = "https://api.bybit.com/v5/market/kline"
 BYBIT_TESTNET_REST = "https://api-testnet.bybit.com/v5/market/kline"
+BINANCE_REST = "https://fapi.binance.com/fapi/v1/klines"
+OKX_REST = "https://www.okx.com/api/v5/market/candles"
 MAX_BARS = 400          # rolling history kept per interval
+
+# Bybit interval code (minutes as string / D,W,M) -> other venues' bar strings.
+_BINANCE_IV = {"1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
+               "60": "1h", "120": "2h", "240": "4h", "360": "6h",
+               "720": "12h", "D": "1d", "W": "1w"}
+_OKX_IV = {"1": "1m", "3": "3m", "5": "5m", "15": "15m", "30": "30m",
+           "60": "1H", "120": "2H", "240": "4H", "360": "6H",
+           "720": "12H", "D": "1D", "W": "1W"}
+
+
+def _base_of(symbol: str) -> str:
+    """'BTCUSDT' -> 'BTC' (for venues that want a dashed instrument id)."""
+    return symbol[:-4] if symbol.endswith("USDT") else symbol
 
 
 class KlineCollector:
@@ -27,7 +43,6 @@ class KlineCollector:
         self.entry_interval = entry_interval
         self.htf_interval = htf_interval
         self.limit = limit
-        self.base = BYBIT_TESTNET_REST if testnet else BYBIT_REST
         # ts_ms -> Candle, per interval (dedupe on bar open time)
         self._bars: dict[str, dict[int, Candle]] = {entry_interval: {},
                                                      htf_interval: {}}
@@ -36,6 +51,16 @@ class KlineCollector:
         self.source = "none"
         self.last_error = ""
         self._polls = 0
+        # Source failover order. Testnet only exists on Bybit, so pin to it.
+        if testnet:
+            self._bybit_url = BYBIT_TESTNET_REST
+            self._sources: list[tuple[str, object]] = [
+                ("bybit_testnet", self._src_bybit)]
+        else:
+            self._bybit_url = BYBIT_REST
+            self._sources = [("bybit", self._src_bybit),
+                             ("binance", self._src_binance),
+                             ("okx", self._src_okx)]
 
     # ------------------------------------------------------------- buffer
 
@@ -60,18 +85,12 @@ class KlineCollector:
         closed = self.entry_closed()
         return closed[-1].ts_ms if closed else None
 
-    def _ingest(self, interval: str, rows: list[list]) -> None:
-        """rows = Bybit result.list, newest-first, each
-        [start, open, high, low, close, volume, turnover] as strings.
-        The newest row is the in-progress bar → forming, not closed."""
-        parsed = []
-        for r in rows:
-            parsed.append(Candle(ts_ms=int(r[0]), open=float(r[1]),
-                                 high=float(r[2]), low=float(r[3]),
-                                 close=float(r[4]), volume=float(r[5])))
-        if not parsed:
+    def _ingest(self, interval: str, candles: list[Candle]) -> None:
+        """Merge a batch (any order). The newest bar is the in-progress bar →
+        forming, not closed."""
+        if not candles:
             return
-        parsed.sort(key=lambda c: c.ts_ms)
+        parsed = sorted(candles, key=lambda c: c.ts_ms)
         self._forming[interval] = parsed[-1]
         store = self._bars[interval]
         for c in parsed[:-1]:                       # all but the forming bar
@@ -81,31 +100,84 @@ class KlineCollector:
             for k in sorted(store)[:-MAX_BARS]:
                 del store[k]
 
-    # ------------------------------------------------------------- fetch
+    # ------------------------------------------------------- source adapters
+    # Each returns a list[Candle] (any order) or raises on failure.
 
-    async def _fetch(self, client: httpx.AsyncClient, interval: str) -> None:
+    async def _src_bybit(self, client: httpx.AsyncClient, interval: str) -> list[Candle]:
         params = {"category": "linear", "symbol": self.symbol,
                   "interval": interval, "limit": self.limit}
-        r = await client.get(self.base, params=params)
+        r = await client.get(self._bybit_url, params=params)
         r.raise_for_status()
-        data = r.json()
-        if data.get("retCode") != 0:
-            raise RuntimeError(f"bybit retCode {data.get('retCode')}: "
-                               f"{data.get('retMsg')}")
-        self._ingest(interval, data.get("result", {}).get("list", []))
+        d = r.json()
+        if d.get("retCode") != 0:
+            raise RuntimeError(f"retCode {d.get('retCode')}: {d.get('retMsg')}")
+        # rows newest-first: [start, o, h, l, c, v, turnover] as strings
+        return [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
+                       low=float(x[3]), close=float(x[4]), volume=float(x[5]))
+                for x in d.get("result", {}).get("list", [])]
+
+    async def _src_binance(self, client: httpx.AsyncClient, interval: str) -> list[Candle]:
+        iv = _BINANCE_IV.get(interval)
+        if iv is None:
+            raise RuntimeError(f"unsupported interval {interval}")
+        r = await client.get(BINANCE_REST,
+                             params={"symbol": self.symbol, "interval": iv,
+                                     "limit": self.limit})
+        r.raise_for_status()
+        rows = r.json()
+        if not isinstance(rows, list):
+            raise RuntimeError(str(rows)[:80])
+        # rows oldest-first: [openTime, o, h, l, c, v, closeTime, ...]
+        return [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
+                       low=float(x[3]), close=float(x[4]), volume=float(x[5]))
+                for x in rows]
+
+    async def _src_okx(self, client: httpx.AsyncClient, interval: str) -> list[Candle]:
+        iv = _OKX_IV.get(interval)
+        if iv is None:
+            raise RuntimeError(f"unsupported interval {interval}")
+        inst = f"{_base_of(self.symbol)}-USDT-SWAP"
+        r = await client.get(OKX_REST,
+                             params={"instId": inst, "bar": iv, "limit": self.limit})
+        r.raise_for_status()
+        d = r.json()
+        if str(d.get("code", "0")) != "0":
+            raise RuntimeError(f"code {d.get('code')}: {d.get('msg')}")
+        # rows newest-first: [ts, o, h, l, c, vol, volCcy, ...]
+        return [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
+                       low=float(x[3]), close=float(x[4]), volume=float(x[5]))
+                for x in d.get("data", [])]
+
+    # ------------------------------------------------------------- fetch
 
     async def poll_once(self, client: httpx.AsyncClient) -> None:
-        for interval in (self.htf_interval, self.entry_interval):
-            await self._fetch(client, interval)
-        self._polls += 1
-        self.source = "bybit_rest"
-        self.last_error = ""
+        """Fetch BOTH intervals from the first reachable source (same source for
+        both, so the strategy never mixes venues within a poll)."""
+        errors: list[str] = []
+        for name, fn in self._sources:
+            try:
+                entry = await fn(client, self.entry_interval)
+                if not entry:
+                    raise RuntimeError("empty entry list")
+                htf = await fn(client, self.htf_interval)
+                self._ingest(self.entry_interval, entry)
+                self._ingest(self.htf_interval, htf)
+                self.source = name
+                self.last_error = ""
+                self._polls += 1
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:                  # noqa: BLE001 — try next source
+                errors.append(f"{name}: {type(e).__name__}: {str(e)[:50]}")
+        self.source = "none"
+        raise RuntimeError(" | ".join(errors) or "no sources configured")
 
     async def run(self, stop: asyncio.Event, poll_sec: float = 2.0) -> None:
-        """Poll both intervals until stopped; never raises out."""
+        """Poll until stopped; never raises out."""
         backoff = 2.0
-        async with httpx.AsyncClient(timeout=12,
-                                     headers={"User-Agent": "coinmaster-pro"}) as client:
+        ua = "Mozilla/5.0 (compatible; coinmaster-pro/1.0)"
+        async with httpx.AsyncClient(timeout=12, headers={"User-Agent": ua}) as client:
             while not stop.is_set():
                 try:
                     await self.poll_once(client)
@@ -114,8 +186,7 @@ class KlineCollector:
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    self.last_error = f"{type(e).__name__}: {e}"
-                    self.source = "none"
+                    self.last_error = f"{type(e).__name__}: {e}"[:200]
                     wait = backoff
                     backoff = min(30.0, backoff * 1.6)
                 try:
@@ -127,6 +198,7 @@ class KlineCollector:
     def status(self) -> dict:
         return {
             "source": self.source,
+            "sources": [n for n, _ in self._sources],
             "entry_bars": len(self._bars[self.entry_interval]),
             "htf_bars": len(self._bars[self.htf_interval]),
             "last_price": self.last_price(),

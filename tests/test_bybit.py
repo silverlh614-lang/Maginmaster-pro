@@ -243,6 +243,86 @@ def test_candles_export():
     print("ok  candles export (ema import regression)")
 
 
+def _klines_bybit(n=6, base=63000.0):
+    # newest-first: [start, o, h, l, c, v, turnover] as strings
+    rows = []
+    for i in range(n):
+        ts = 1_700_000_000_000 + i * 900_000
+        px = base + i * 5
+        rows.append([str(ts), str(px), str(px + 50), str(px - 50),
+                     str(px + 10), "100", "0"])
+    return list(reversed(rows))
+
+
+def _klines_binance(n=6, base=63000.0):
+    # oldest-first: [openTime, o, h, l, c, v, closeTime, ...]
+    rows = []
+    for i in range(n):
+        ts = 1_700_000_000_000 + i * 900_000
+        px = base + i * 5
+        rows.append([ts, str(px), str(px + 50), str(px - 50), str(px + 10),
+                     "100", ts + 899_999, "0", 0, "0", "0", "0"])
+    return rows
+
+
+def test_kline_source_failover():
+    """Bybit 403 (geo-block) must fail over to Binance, then OKX, and populate
+    the same Candle buffer. No real network — httpx.MockTransport."""
+    import asyncio
+    import httpx
+    from app.trading_bybit.collectors.kline import KlineCollector
+
+    def make_handler(fail_hosts):
+        def handler(request: httpx.Request) -> httpx.Response:
+            host = request.url.host
+            if host in fail_hosts:
+                return httpx.Response(403, text="forbidden")
+            if host == "fapi.binance.com":
+                return httpx.Response(200, json=_klines_binance())
+            if host == "www.okx.com":
+                # okx: code "0", data newest-first [ts,o,h,l,c,vol,volCcy,...]
+                rows = [[r[0], r[1], r[2], r[3], r[4], r[5], "0", "0", "1"]
+                        for r in reversed(_klines_binance())]
+                return httpx.Response(200, json={"code": "0", "data": rows})
+            if host == "api.bybit.com":
+                return httpx.Response(200, json={"retCode": 0, "retMsg": "OK",
+                    "result": {"list": _klines_bybit()}})
+            return httpx.Response(404)
+        return handler
+
+    async def run_case(fail_hosts, expect_source):
+        col = KlineCollector("BTCUSDT", "15", "60", limit=200)
+        transport = httpx.MockTransport(make_handler(fail_hosts))
+        async with httpx.AsyncClient(transport=transport) as client:
+            await col.poll_once(client)
+        assert col.source == expect_source, (fail_hosts, col.source)
+        assert len(col.entry_closed()) >= 4, col.status()
+        assert col.last_price() is not None
+        return col
+
+    # primary works
+    asyncio.run(run_case(set(), "bybit"))
+    # bybit geo-blocked -> binance
+    asyncio.run(run_case({"api.bybit.com"}, "binance"))
+    # bybit + binance blocked -> okx
+    asyncio.run(run_case({"api.bybit.com", "fapi.binance.com"}, "okx"))
+
+    # all blocked -> raises, source none
+    async def all_fail():
+        col = KlineCollector("BTCUSDT", "15", "60")
+        transport = httpx.MockTransport(make_handler(
+            {"api.bybit.com", "fapi.binance.com", "www.okx.com"}))
+        async with httpx.AsyncClient(transport=transport) as client:
+            try:
+                await col.poll_once(client)
+                assert False, "should have raised"
+            except RuntimeError:
+                pass
+        assert col.source == "none"
+    asyncio.run(all_fail())
+    print("ok  kline source failover (bybit->binance->okx)")
+
+
 if __name__ == "__main__":
     test_indicators()
     test_sizing()
@@ -253,4 +333,5 @@ if __name__ == "__main__":
     test_strategy_signal()
     test_backtest_replay()
     test_candles_export()
+    test_kline_source_failover()
     print("\nall bybit tests passed ✅")

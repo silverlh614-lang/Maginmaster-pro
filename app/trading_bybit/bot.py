@@ -47,6 +47,28 @@ class SymbolBot:
         self._last_bar_ts: int | None = None
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
+        # The kline feed runs independent of trading so the live chart warms up
+        # even while the bot is stopped.
+        self._feed_stop = asyncio.Event()
+        self._feed_task: asyncio.Task | None = None
+
+    def start_feed(self) -> None:
+        """Start the market-data feed (idempotent). Warms candles regardless of
+        whether the trading loop is running."""
+        if self._feed_task is not None and not self._feed_task.done():
+            return
+        self._feed_stop = asyncio.Event()
+        self._feed_task = asyncio.create_task(
+            self.collector.run(self._feed_stop, self.cfg.poll_sec),
+            name=f"kline-{self.spec.key}")
+
+    async def stop_feed(self) -> None:
+        if self._feed_task is None:
+            return
+        self._feed_stop.set()
+        self._feed_task.cancel()
+        await asyncio.gather(self._feed_task, return_exceptions=True)
+        self._feed_task = None
 
     async def start(self, mode: str, strategy: str) -> None:
         if self.running:
@@ -60,14 +82,14 @@ class SymbolBot:
         self._last_bar_ts = None
         self.running = True
         self.note = "starting"
-        k = self.spec.key
+        self.start_feed()                       # ensure market data is flowing
         self._tasks = [
-            asyncio.create_task(self.collector.run(self._stop, self.cfg.poll_sec),
-                                name=f"kline-{k}"),
-            asyncio.create_task(self._decision_loop(), name=f"loop-{k}"),
+            asyncio.create_task(self._decision_loop(),
+                                name=f"loop-{self.spec.key}"),
         ]
 
     async def shutdown(self) -> None:
+        # Stop only the trading loop; the feed keeps the chart live.
         if not self.running:
             return
         self._stop.set()
@@ -229,6 +251,15 @@ class BybitManager:
         self.state_store.save(st)
         return {"ok": True, "mode": mode, "strategy": strategy,
                 "symbols": list(self.bots)}
+
+    def start_feeds(self) -> None:
+        """Warm the live chart for every symbol without starting trading."""
+        for b in self.bots.values():
+            b.start_feed()
+
+    async def stop_feeds(self) -> None:
+        for b in self.bots.values():
+            await b.stop_feed()
 
     async def shutdown(self) -> None:
         for b in self.bots.values():

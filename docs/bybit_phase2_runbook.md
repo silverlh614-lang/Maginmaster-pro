@@ -11,15 +11,20 @@
 ## 0. ⚠️ 리전(Region) — 가장 먼저 확인 (가장 흔한 실패 원인)
 
 **Bybit은 미국 등 일부 지역 IP를 차단한다.** Railway 기본 배포 리전은 **US(Oregon/Virginia)** 라,
-그대로 두면 봇의 데이터 피드가 Bybit에 붙지 못하고 `403`/blocked 에러가 난다.
+그대로 두면 Bybit에 `403`/blocked가 난다.
 
-→ 서비스 리전을 **Singapore (Southeast Asia)** 또는 **EU (Amsterdam)** 로 설정한다.
-- Service → **Settings → Region** → `Southeast Asia (Singapore)` 선택 → **Redeploy**
-- 확인법: 배포 후 `/bybit`에서 START → **데이터 피드 소스가 `bybit_rest`** 로 뜨고 "에러: 없음"
-  이면 OK. `last_error`에 403/CloudFront/blocked가 뜨면 리전 문제 → 리전 변경.
+**자동 폴백(v1.1+):** 데이터 피드는 이제 **Bybit → Binance(USDⓈ-M) → OKX** 순으로 소스를
+자동 전환한다. 그리고 kline 피드는 **봇 START와 무관하게 앱 부팅 시 상시 가동**되므로,
+페이지를 열면 봇이 정지 상태여도 라이브 차트에 캔들이 바로 뜬다. Bybit이 막힌 리전에서도
+Binance/OKX가 뚫리면 차트·지표는 정상 동작한다(데이터 피드 소스가 `binance`/`okx`로 표시).
 
-> 플랜에 따라 특정 리전이 안 보일 수 있다. Singapore/EU를 못 고르면 Bybit 접근이 어려우니,
-> 그 경우 로컬(한국 등 Bybit 허용 지역)에서 백테스트만 먼저 돌리는 방법(부록 A)을 쓴다.
+→ 그래도 **실거래(Phase 3)는 Bybit 직결이 전제**이므로, 리전은 Bybit 허용 지역을 권장한다.
+- Service → **Settings → Region** → `Southeast Asia (Singapore)` 또는 `EU (Amsterdam)` → **Redeploy**
+- 확인법: `/bybit`에서 데이터 피드 **소스가 `bybit`** 로 뜨고 "에러: 없음"이면 OK.
+  `binance`/`okx`로 떠 있으면 Bybit이 차단된 것 — 차트는 살아 있으나 리전 교체 권장.
+
+> 세 소스가 모두 막히면 차트에 "⚠ kline 소스 연결 실패"와 에러 원문이 뜬다.
+> 그 경우 로컬(한국 등 허용 지역)에서 백테스트만 먼저 돌리는 방법(부록 A)을 쓴다.
 
 ---
 

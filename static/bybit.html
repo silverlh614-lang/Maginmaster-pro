@@ -503,7 +503,11 @@ function drawChart(){
   cv.width=W*dpr; cv.height=H*dpr; const g=cv.getContext("2d"); g.scale(dpr,dpr);
   g.clearRect(0,0,W,H);
   const data=window._candles; if(!data||!data.candles||!data.candles.length){
-    g.fillStyle="#4e5864";g.font="12px monospace";g.fillText("봉 워밍업 중… Bybit kline 수집",16,H/2);return;}
+    const fd=window._feed||{};
+    let msg="봉 워밍업 중… kline 수집 중";
+    if(fd.source&&fd.source!=="none") msg="봉 워밍업 중… ("+fd.source+" 연결됨, 캔들 대기)";
+    else if(fd.last_error) msg="⚠ kline 소스 연결 실패 — "+fd.last_error;
+    g.fillStyle=fd.last_error?"#ff6b74":"#4e5864";g.font="12px monospace";g.fillText(msg,16,H/2);return;}
   const cs=data.candles, ema=data.ema5||[];
   const ov=window._overlay||{};
   const padT=14,padB=42,padL=6,padR=64;
@@ -566,6 +570,7 @@ async function refresh(){
 
   const b=(s.symbols||{}).BTC; if(!b)return;
   const mgr=b.manager||{}, col=b.collector||{}, dg=b.diagnostics;
+  window._feed=col;   // {source,last_error,entry_bars,...} for the chart placeholder
   const eq=mgr.equity_usd, px=col.last_price;
   $("sEquity").textContent=money(eq);$("equityBig").textContent=money(eq);
   const agg=(s.by_symbol&&s.by_symbol.BTC)||{};

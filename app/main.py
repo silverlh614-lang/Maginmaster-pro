@@ -31,6 +31,9 @@ CHAIN_CHART_PATH = str(DATA_DIR / "btc_cycle_chain.png")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Warm the kline feed on boot so the live chart shows candles immediately,
+    # even before an operator starts the bot.
+    BYBIT_MANAGER.start_feeds()
     # Auto-resume: if the Bybit bot was running before a restart/redeploy,
     # start it again with the same mode/strategy (state persists in the
     # DATA_DIR volume).
@@ -43,6 +46,7 @@ async def lifespan(app: FastAPI):
     # on the next boot. An operator pressing "stop" is the only thing that
     # persists an intentional off state.
     await BYBIT_MANAGER.shutdown()
+    await BYBIT_MANAGER.stop_feeds()
 
 
 app = FastAPI(
