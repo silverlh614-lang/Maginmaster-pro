@@ -31,6 +31,25 @@ class PositionManager:
         self.bars_in_trade = 0
         self.note = "flat"
 
+    # ------------------------------------------------------- persistence
+
+    def to_state(self) -> dict:
+        """Full snapshot for restart survival (equity + live position)."""
+        return {"equity": round(self.equity, 8),
+                "bars_in_trade": self.bars_in_trade,
+                "note": self.note,
+                "position": _pos_to_dict(self.pos) if self.pos else None}
+
+    def load_state(self, st: dict | None) -> None:
+        """Restore a snapshot saved by to_state(). Absent/empty -> fresh start."""
+        if not st:
+            return
+        self.equity = float(st.get("equity", self.equity))
+        self.bars_in_trade = int(st.get("bars_in_trade", 0))
+        self.note = st.get("note", self.note)
+        p = st.get("position")
+        self.pos = _pos_from_dict(p) if p else None
+
     # ------------------------------------------------------------- helpers
 
     @property
@@ -253,3 +272,43 @@ class PositionManager:
                 pd["unrealized_usd"] = p.unrealized_usd(last_price)
             d["position"] = pd
         return d
+
+
+# ----------------------------------------------------- (de)serialization
+# Full round-trip of the position (unlike Position.as_dict, which is a lossy
+# display view) so a live trade can be rebuilt exactly after a restart.
+
+def _unit_to_dict(u: Unit) -> dict:
+    return {"side": u.side.value, "entry_price": u.entry_price, "qty": u.qty,
+            "stop_price": u.stop_price, "entry_ts": u.entry_ts,
+            "is_add": u.is_add, "fee_usd": u.fee_usd}
+
+
+def _unit_from_dict(d: dict) -> Unit:
+    return Unit(side=Side(d["side"]), entry_price=d["entry_price"], qty=d["qty"],
+                stop_price=d["stop_price"], entry_ts=d["entry_ts"],
+                is_add=d.get("is_add", False), fee_usd=d.get("fee_usd", 0.0))
+
+
+def _pos_to_dict(p: Position) -> dict:
+    return {"symbol": p.symbol, "side": p.side.value,
+            "units": [_unit_to_dict(u) for u in p.units],
+            "initial_risk_usd": p.initial_risk_usd,
+            "target_price": p.target_price, "trail_price": p.trail_price,
+            "realized_pnl_usd": p.realized_pnl_usd,
+            "realized_fee_usd": p.realized_fee_usd,
+            "closed_qty": p.closed_qty, "partial_done": p.partial_done,
+            "state": p.state.value}
+
+
+def _pos_from_dict(d: dict) -> Position:
+    return Position(
+        symbol=d["symbol"], side=Side(d["side"]),
+        units=[_unit_from_dict(u) for u in d.get("units", [])],
+        initial_risk_usd=d.get("initial_risk_usd", 0.0),
+        target_price=d.get("target_price"), trail_price=d.get("trail_price"),
+        realized_pnl_usd=d.get("realized_pnl_usd", 0.0),
+        realized_fee_usd=d.get("realized_fee_usd", 0.0),
+        closed_qty=d.get("closed_qty", 0.0),
+        partial_done=d.get("partial_done", False),
+        state=PositionState(d["state"]))

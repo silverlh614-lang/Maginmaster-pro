@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 TRADES_CSV = DATA_DIR / "bybit_trades.csv"
 STATE_JSON = DATA_DIR / "bybit_state.json"
+POSITIONS_JSON = DATA_DIR / "bybit_positions.json"
 
 FIELDS = [
     "ts", "symbol", "mode", "strategy", "event", "side", "signal_type",
@@ -122,3 +123,28 @@ class BotState:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             STATE_JSON.write_text(json.dumps(state, ensure_ascii=False, indent=2),
                                   encoding="utf-8")
+
+
+class PositionStore:
+    """Per-symbol PositionManager snapshots (compounded equity + the live open
+    position) so an in-flight trade and the 복리 equity survive restarts and
+    redeploys. Requires DATA_DIR to point at a persistent volume."""
+
+    def _read(self) -> dict:
+        if POSITIONS_JSON.exists():
+            try:
+                return json.loads(POSITIONS_JSON.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def load(self, symbol: str) -> dict:
+        return self._read().get(symbol.upper(), {})
+
+    def save(self, symbol: str, state: dict) -> None:
+        with _lock:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            allst = self._read()
+            allst[symbol.upper()] = state
+            POSITIONS_JSON.write_text(
+                json.dumps(allst, ensure_ascii=False, indent=2), encoding="utf-8")

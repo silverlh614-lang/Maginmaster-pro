@@ -23,18 +23,20 @@ from .execution.position import PositionManager
 from .indicators import atr, ema
 from .models import Side
 from .risk import BybitRiskManager
-from .store import BotState, Journal
+from .store import BotState, Journal, PositionStore
 from .strategies import STRATEGIES, make_strategy
 from .strategies.base import BybitContext
 
 
 class SymbolBot:
     def __init__(self, spec: SymbolSpec, cfg: BybitConfig,
-                 journal: Journal, risk: BybitRiskManager):
+                 journal: Journal, risk: BybitRiskManager,
+                 pos_store: PositionStore):
         self.spec = spec
         self.cfg = cfg
         self.journal = journal
         self.risk = risk
+        self.pos_store = pos_store
         self.collector = KlineCollector(spec.symbol, cfg.entry_interval,
                                         cfg.htf_interval, cfg.warmup_bars,
                                         testnet=cfg.testnet and cfg.live_enabled)
@@ -45,6 +47,7 @@ class SymbolBot:
         self.running = False
         self.note = "stopped"
         self._last_bar_ts: int | None = None
+        self._last_pos_state: dict | None = None
         self._stop = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
         # The kline feed runs independent of trading so the live chart warms up
@@ -78,6 +81,10 @@ class SymbolBot:
         self.strategy = make_strategy(strategy, self.cfg)
         self.pm = PositionManager(self.spec, self.cfg, self.risk, self.journal,
                                   mode, strategy)
+        # Restore compounded equity + any live position from the last run so a
+        # trade in progress survives a restart / redeploy.
+        self.pm.load_state(self.pos_store.load(self.spec.key))
+        self._last_pos_state = self.pm.to_state()
         self._stop = asyncio.Event()
         self._last_bar_ts = None
         self.running = True
@@ -87,6 +94,15 @@ class SymbolBot:
             asyncio.create_task(self._decision_loop(),
                                 name=f"loop-{self.spec.key}"),
         ]
+
+    def _persist_pos(self) -> None:
+        """Snapshot the position/equity after a change so it survives restarts."""
+        if self.pm is None:
+            return
+        st = self.pm.to_state()
+        if st != self._last_pos_state:
+            self.pos_store.save(self.spec.key, st)
+            self._last_pos_state = st
 
     async def shutdown(self) -> None:
         # Stop only the trading loop; the feed keeps the chart live.
@@ -111,6 +127,7 @@ class SymbolBot:
             if not p or px is None:
                 return {"ok": False, "error": "no open position"}
             self.pm._close(px, "manual close", time.time())
+            self._persist_pos()
             return {"ok": True, "pnl_usd": p.realized_pnl_usd}
         return {"ok": False, "error": f"unknown action {action}"}
 
@@ -121,6 +138,7 @@ class SymbolBot:
             try:
                 self._step(self.strategy)
                 self.risk.record_ok()
+                self._persist_pos()             # survive restarts/redeploys
             except Exception as e:
                 self.note = f"loop error: {type(e).__name__}: {e}"
                 self.risk.record_error(f"{self.spec.key}: {e}")
@@ -221,9 +239,10 @@ class BybitManager:
         self.cfg = cfg
         self.journal = Journal()
         self.state_store = BotState()
+        self.pos_store = PositionStore()
         self.risk = BybitRiskManager(cfg, self.journal, self.state_store)
         self.bots: dict[str, SymbolBot] = {
-            spec.key: SymbolBot(spec, cfg, self.journal, self.risk)
+            spec.key: SymbolBot(spec, cfg, self.journal, self.risk, self.pos_store)
             for spec in enabled_symbols()
         }
         self.mode = "paper"

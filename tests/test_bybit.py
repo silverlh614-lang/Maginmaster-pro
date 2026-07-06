@@ -323,6 +323,52 @@ def test_kline_source_failover():
     print("ok  kline source failover (bybit->binance->okx)")
 
 
+def test_state_persistence():
+    """Equity + a live open position must round-trip through PositionStore so a
+    trade in progress and the 복리 equity survive a restart/redeploy."""
+    from app.trading_bybit.config import BybitConfig, SYMBOL_SPECS
+    from app.trading_bybit.execution.position import PositionManager
+    from app.trading_bybit.models import Position, PositionState, Side, Unit
+    from app.trading_bybit.risk import BybitRiskManager
+    from app.trading_bybit.store import BotState, Journal, PositionStore
+
+    cfg = BybitConfig()
+    spec = SYMBOL_SPECS["BTC"]
+    j = Journal()
+    risk = BybitRiskManager(cfg, j, BotState())
+    pm = PositionManager(spec, cfg, risk, j, "paper", "trend_breakout")
+    # simulate a compounded equity + a partially-managed open long
+    pm.pos = Position(symbol="BTCUSDT", side=Side.LONG,
+                      units=[Unit(Side.LONG, 63000.0, 0.01, 62500.0, 1.0,
+                                  fee_usd=0.3)],
+                      initial_risk_usd=5.0, target_price=64000.0,
+                      trail_price=62800.0, realized_pnl_usd=2.1,
+                      partial_done=True, state=PositionState.OPEN)
+    pm.equity = 207.4
+    pm.bars_in_trade = 9
+
+    store = PositionStore()
+    store.save("BTC", pm.to_state())
+
+    # a fresh manager (as after a redeploy) restores the exact state
+    pm2 = PositionManager(spec, cfg, risk, j, "paper", "trend_breakout")
+    assert pm2.equity == cfg.equity_usd            # default before restore
+    pm2.load_state(store.load("BTC"))
+    assert abs(pm2.equity - 207.4) < 1e-9, pm2.equity
+    assert pm2.bars_in_trade == 9
+    p = pm2.pos
+    assert p is not None and p.state == PositionState.OPEN and p.side == Side.LONG
+    assert p.partial_done and abs(p.trail_price - 62800.0) < 1e-9
+    assert abs(p.avg_entry - 63000.0) < 1e-6 and abs(p.open_qty - 0.01) < 1e-9
+    assert abs(p.realized_pnl_usd - 2.1) < 1e-9
+
+    # nothing saved for another symbol -> fresh start, no crash
+    pm3 = PositionManager(spec, cfg, risk, j, "paper", "trend_breakout")
+    pm3.load_state(store.load("ETH"))
+    assert pm3.pos is None and pm3.equity == cfg.equity_usd
+    print("ok  state persistence (equity + open position round-trip)")
+
+
 if __name__ == "__main__":
     test_indicators()
     test_sizing()
@@ -334,4 +380,5 @@ if __name__ == "__main__":
     test_backtest_replay()
     test_candles_export()
     test_kline_source_failover()
+    test_state_persistence()
     print("\nall bybit tests passed ✅")

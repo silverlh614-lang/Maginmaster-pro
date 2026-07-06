@@ -63,11 +63,20 @@ Bybit 페이퍼/백테스트는 **API 키가 필요 없다.** 최소 설정:
 | `BYBIT_RR_TARGET` | `2.0` | 손익비 R:R |
 | `BYBIT_ATR_STOP_MULT` | `1.5` | ATR 손절 배수 |
 
-## 4. Volume (상태 유지 — 권장)
+## 4. Volume (상태 영속성 — ⚠️ 필수)
 
-Service → **Volumes → New Volume** → Mount path `/data` (위 `DATA_DIR`와 일치).
-- 재배포·재시작에도 봇 상태·저널·킬스위치가 유지된다.
-- START 상태로 두면 재배포 시 **auto-resume**(자동 재가동).
+Service → **Volumes → New Volume** → Mount path `/data` (`DATA_DIR` 기본값과 일치).
+
+**볼륨을 붙여야만 재배포/재시작에도 다음이 전부 유지된다:**
+- 봇 **START/정지 상태** → START로 두면 재배포 시 **auto-resume**(자동 재가동)
+- **복리 EQUITY** (실현손익이 누적된 계좌 잔고 — `bybit_positions.json`)
+- **진행 중인 오픈 포지션** (진입가·수량·손절·트레일·부분익절 상태까지 그대로 복원)
+- **트레이드 저널** (`bybit_trades.csv` — 승률·R기대값·PnL)
+- **킬스위치·일일 카운터** (`bybit_state.json`)
+
+> ⚠️ 볼륨을 안 붙이면 `/data`는 **매 배포마다 초기화**된다 — START도, 계좌($200으로 리셋)도,
+> 열린 포지션도 전부 사라진다. "재배포돼도 계속 기억"하려면 볼륨이 반드시 필요하다.
+> 봇은 매 캔들마다 상태를 볼륨에 스냅샷하고, START 시 그 스냅샷에서 이어받는다.
 
 ## 5. 페이퍼 봇 START & 확인
 
