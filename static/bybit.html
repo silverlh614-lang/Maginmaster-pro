@@ -118,11 +118,12 @@
   .gate.ok .dot{background:var(--up);box-shadow:0 0 10px var(--up)}
   .gate .lb{font-weight:700;letter-spacing:.04em}
   .gate .nf{margin-left:auto;color:var(--faint);font-size:10px;font-variant-numeric:tabular-nums}
-  .ring{position:relative;width:104px;height:104px;flex:none}
+  .ring{position:relative;width:104px;height:104px;flex:none;margin-inline:auto}
   .ring svg{transform:rotate(-90deg)}
-  .ring .num{position:absolute;inset:0;display:grid;place-items:center;text-align:center;line-height:1.1}
-  .ring .num b{font-size:26px;font-weight:800}
-  .ring .num small{font-size:9px;color:var(--faint);letter-spacing:.16em;text-transform:uppercase}
+  .ring .num{position:absolute;inset:0;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:3px;text-align:center;line-height:1}
+  .ring .num b{font-size:25px;font-weight:800}
+  .ring .num small{font-size:8.5px;color:var(--faint);letter-spacing:.16em;text-transform:uppercase}
   .dirbadge{display:inline-block;padding:2px 10px;border-radius:3px;font-weight:800;font-size:11px;letter-spacing:.1em}
   .dir-LONG{background:var(--up-dim);color:var(--up)} .dir-SHORT{background:var(--dn-dim);color:var(--dn)}
   .ready-tag{margin-top:6px;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);text-align:center}
@@ -309,7 +310,7 @@
               <circle cx="52" cy="52" r="46" fill="none" stroke="#161b21" stroke-width="8"></circle>
               <circle id="ringArc" cx="52" cy="52" r="46" fill="none" stroke="var(--brand)"
                 stroke-width="8" stroke-linecap="round" stroke-dasharray="289" stroke-dashoffset="289"></circle>
-            </svg><div class="num"><b id="ringNum">0/4</b><br><small>GATES</small></div></div>
+            </svg><div class="num"><b id="ringNum">0/4</b><small>GATES</small></div></div>
             <div class="ready-tag" id="readyTag">대기</div>
           </div>
         </div>
