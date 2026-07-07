@@ -30,6 +30,10 @@ class PositionManager:
         self.pos: Position | None = None
         self.bars_in_trade = 0
         self.note = "flat"
+        # 리스크 캡은 전 심볼 합산이 원칙 — 관문에 이 심볼의 장부를 등록한다.
+        # (백테스트의 permissive shim 처럼 등록 개념이 없는 관문이면 생략)
+        if hasattr(risk, "register_book"):
+            risk.register_book(spec.key, self)
 
     # ------------------------------------------------------- persistence
 
@@ -64,6 +68,13 @@ class PositionManager:
             return 0.0
         return p.open_qty * abs(p.avg_entry - p.stop_price)
 
+    def _exposure(self) -> tuple[int, float]:
+        """Exposure fed to the risk gate: GLOBAL across symbols when the gate
+        keeps a book registry, own-symbol only otherwise (backtest shim)."""
+        if hasattr(self.risk, "global_exposure"):
+            return self.risk.global_exposure()
+        return self.open_positions, self.open_risk_usd
+
     def _fee(self, notional: float) -> float:
         return round(abs(notional) * self.cfg.taker_fee_frac, 6)
 
@@ -87,7 +98,8 @@ class PositionManager:
         if qty <= 0:
             self.note = f"size skip: {why}"
             return False
-        ok, gate = self.risk.allow_entry(self.open_positions, self.open_risk_usd,
+        open_n, open_risk = self._exposure()
+        ok, gate = self.risk.allow_entry(open_n, open_risk,
                                          risk_usd, is_add=False,
                                          equity_usd=self.equity)
         if not ok:
@@ -129,7 +141,8 @@ class PositionManager:
             self.spec, self.cfg.leverage_max)
         if qty <= 0:
             return False
-        ok, gate = self.risk.allow_entry(self.open_positions, self.open_risk_usd,
+        open_n, open_risk = self._exposure()
+        ok, gate = self.risk.allow_entry(open_n, open_risk,
                                          risk_usd, is_add=True,
                                          equity_usd=self.equity)
         if not ok:
