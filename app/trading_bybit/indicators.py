@@ -1,4 +1,4 @@
-"""@responsibility 지표 순수함수 — EMA·ATR·거래량MA·장악형 캔들·박스권, 전략이 소비하는 계산 전용
+"""@responsibility 지표 순수함수 — EMA·ATR·ADX·거래량MA·장악형·박스권·피벗·추세선, 전략이 소비하는 계산 전용
 
 Pure indicator functions over Candle lists. No I/O, no state — every value
 is derived from the candles passed in, so they are trivially unit-testable
@@ -76,3 +76,77 @@ def box_range(candles: list[Candle], lookback: int) -> tuple[float, float] | Non
         return None
     window = candles[-(lookback + 1):-1]
     return max(c.high for c in window), min(c.low for c in window)
+
+
+def adx(candles: list[Candle], period: int) -> float | None:
+    """Wilder's ADX (trend strength, 0-100). High = trending, low = ranging —
+    the regime gate between 추세장 and 횡보장. None if fewer than 2*period+1
+    bars (DI warmup + DX smoothing)."""
+    if len(candles) < 2 * period + 1 or period <= 0:
+        return None
+    plus_dm: list[float] = []
+    minus_dm: list[float] = []
+    trs: list[float] = []
+    for i in range(1, len(candles)):
+        c, p = candles[i], candles[i - 1]
+        up, down = c.high - p.high, p.low - c.low
+        plus_dm.append(up if (up > down and up > 0) else 0.0)
+        minus_dm.append(down if (down > up and down > 0) else 0.0)
+        trs.append(max(c.high - c.low, abs(c.high - p.close),
+                       abs(c.low - p.close)))
+
+    def _wilder_sum(vals: list[float]) -> list[float]:
+        s = sum(vals[:period])
+        out = [s]
+        for v in vals[period:]:
+            s = s - s / period + v
+            out.append(s)
+        return out
+
+    tr_s, pdm_s, mdm_s = _wilder_sum(trs), _wilder_sum(plus_dm), _wilder_sum(minus_dm)
+    dxs: list[float] = []
+    for t, pd, md in zip(tr_s, pdm_s, mdm_s):
+        if t <= 0:
+            dxs.append(0.0)
+            continue
+        pdi, mdi = 100.0 * pd / t, 100.0 * md / t
+        den = pdi + mdi
+        dxs.append(100.0 * abs(pdi - mdi) / den if den > 0 else 0.0)
+    if len(dxs) < period:
+        return None
+    adx_val = sum(dxs[:period]) / period
+    for d in dxs[period:]:
+        adx_val = (adx_val * (period - 1) + d) / period
+    return adx_val
+
+
+def swing_points(candles: list[Candle], strength: int
+                 ) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    """(pivot_highs, pivot_lows) as (index, price). A pivot needs `strength`
+    strictly lower highs / higher lows on BOTH sides, so the newest `strength`
+    bars can never be pivots yet (no look-ahead — a pivot is only known once
+    confirmed by the right-hand bars)."""
+    highs: list[tuple[int, float]] = []
+    lows: list[tuple[int, float]] = []
+    for i in range(strength, len(candles) - strength):
+        c = candles[i]
+        around = [candles[j] for j in range(i - strength, i + strength + 1) if j != i]
+        if all(c.high > x.high for x in around):
+            highs.append((i, c.high))
+        if all(c.low < x.low for x in around):
+            lows.append((i, c.low))
+    return highs, lows
+
+
+def trendline_from(pivots: list[tuple[int, float]]
+                   ) -> tuple[float, float] | None:
+    """(slope, intercept) of the line through the LAST TWO pivots — the classic
+    two-touch trendline. value at bar i = slope*i + intercept. None with fewer
+    than two pivots."""
+    if len(pivots) < 2:
+        return None
+    (i1, p1), (i2, p2) = pivots[-2], pivots[-1]
+    if i2 == i1:
+        return None
+    slope = (p2 - p1) / (i2 - i1)
+    return slope, p1 - slope * i1
