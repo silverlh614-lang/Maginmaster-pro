@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 
+from ..account import AccountLedger
 from ..config import BybitConfig, SymbolSpec
 from ..models import Candle, Position, PositionState, Side, TradeSignal, Unit
 from ..risk import BybitRiskManager, size_position
@@ -19,14 +20,17 @@ from ..store import Journal
 
 class PositionManager:
     def __init__(self, spec: SymbolSpec, cfg: BybitConfig, risk: BybitRiskManager,
-                 journal: Journal, mode: str = "paper", strategy_name: str = ""):
+                 journal: Journal, mode: str = "paper", strategy_name: str = "",
+                 ledger: AccountLedger | None = None):
         self.spec = spec
         self.cfg = cfg
         self.risk = risk
         self.journal = journal
         self.mode = mode
         self.strategy_name = strategy_name
-        self.equity = cfg.equity_usd
+        # 자산은 전 심볼 공유 원장(한 계좌) 소유 — 미지정 시(백테스트·단위
+        # 테스트) 이 심볼만의 비영속 로컬 원장으로 폴백.
+        self._ledger = ledger if ledger is not None else AccountLedger(cfg)
         self.pos: Position | None = None
         self.bars_in_trade = 0
         self.note = "flat"
@@ -35,20 +39,29 @@ class PositionManager:
         if hasattr(risk, "register_book"):
             risk.register_book(spec.key, self)
 
+    @property
+    def equity(self) -> float:
+        return self._ledger.equity
+
+    @equity.setter
+    def equity(self, value: float) -> None:
+        self._ledger.set(value)
+
     # ------------------------------------------------------- persistence
 
     def to_state(self) -> dict:
-        """Full snapshot for restart survival (equity + live position)."""
-        return {"equity": round(self.equity, 8),
-                "bars_in_trade": self.bars_in_trade,
+        """Snapshot for restart survival. The live position only — equity is
+        the account ledger's job (AccountStore), not per-symbol state."""
+        return {"bars_in_trade": self.bars_in_trade,
                 "note": self.note,
                 "position": _pos_to_dict(self.pos) if self.pos else None}
 
     def load_state(self, st: dict | None) -> None:
-        """Restore a snapshot saved by to_state(). Absent/empty -> fresh start."""
+        """Restore a snapshot saved by to_state(). Absent/empty -> fresh start.
+        A legacy `equity` field in old records is ignored here — the account
+        ledger inherits it once at BybitManager construction (migration)."""
         if not st:
             return
-        self.equity = float(st.get("equity", self.equity))
         self.bars_in_trade = int(st.get("bars_in_trade", 0))
         self.note = st.get("note", self.note)
         p = st.get("position")

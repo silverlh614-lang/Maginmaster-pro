@@ -19,6 +19,7 @@ DATA_DIR = Path(os.getenv("DATA_DIR", ROOT / "data"))
 TRADES_CSV = DATA_DIR / "bybit_trades.csv"
 STATE_JSON = DATA_DIR / "bybit_state.json"
 POSITIONS_JSON = DATA_DIR / "bybit_positions.json"
+ACCOUNT_JSON = DATA_DIR / "bybit_account.json"
 
 FIELDS = [
     "ts", "symbol", "mode", "strategy", "event", "side", "signal_type",
@@ -125,10 +126,30 @@ class BotState:
                                   encoding="utf-8")
 
 
+class AccountStore:
+    """Single JSON record for the unified account (shared equity across all
+    symbols — 한 계좌). Written through by AccountLedger on every change."""
+
+    def load(self) -> dict:
+        if ACCOUNT_JSON.exists():
+            try:
+                return json.loads(ACCOUNT_JSON.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def save(self, rec: dict) -> None:
+        with _lock:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            ACCOUNT_JSON.write_text(json.dumps(rec, ensure_ascii=False, indent=2),
+                                    encoding="utf-8")
+
+
 class PositionStore:
-    """Per-symbol PositionManager snapshots (compounded equity + the live open
-    position) so an in-flight trade and the 복리 equity survive restarts and
-    redeploys. Requires DATA_DIR to point at a persistent volume."""
+    """Per-symbol PositionManager snapshots (the live open position) so an
+    in-flight trade survives restarts and redeploys. Equity lives in
+    AccountStore (통합 계좌); a legacy `equity` field in old records is only
+    read once, for migration. Requires DATA_DIR on a persistent volume."""
 
     def _read(self) -> dict:
         if POSITIONS_JSON.exists():
