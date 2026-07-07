@@ -82,7 +82,7 @@ def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
     entry_min = _interval_min(cfg.entry_interval)
     htf_min = _interval_min(cfg.htf_interval)
     warmup = max(cfg.box_lookback, cfg.atr_period, cfg.vol_ma_period,
-                 cfg.ema_period) + 2
+                 cfg.ema_period, cfg.range_lookback, 2 * cfg.adx_period + 1) + 2
 
     equity_curve: list[float] = []
     snapshots = 0
