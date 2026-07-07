@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+from .account import AccountLedger
 from .config import (CONFIG, SYMBOL_SPECS, BybitConfig, SymbolSpec,
                      enabled_symbols)
 from .collectors.kline import KlineCollector
@@ -23,7 +24,7 @@ from .execution.position import PositionManager
 from .indicators import atr, ema
 from .models import Side
 from .risk import BybitRiskManager
-from .store import BotState, Journal, PositionStore
+from .store import AccountStore, BotState, Journal, PositionStore
 from .strategies import STRATEGIES, make_strategy
 from .strategies.base import BybitContext
 
@@ -31,12 +32,13 @@ from .strategies.base import BybitContext
 class SymbolBot:
     def __init__(self, spec: SymbolSpec, cfg: BybitConfig,
                  journal: Journal, risk: BybitRiskManager,
-                 pos_store: PositionStore):
+                 pos_store: PositionStore, ledger: AccountLedger):
         self.spec = spec
         self.cfg = cfg
         self.journal = journal
         self.risk = risk
         self.pos_store = pos_store
+        self.ledger = ledger
         self.collector = KlineCollector(spec.symbol, cfg.entry_interval,
                                         cfg.htf_interval, cfg.warmup_bars,
                                         testnet=cfg.testnet and cfg.live_enabled)
@@ -80,9 +82,9 @@ class SymbolBot:
         self.strategy_name = strategy
         self.strategy = make_strategy(strategy, self.cfg)
         self.pm = PositionManager(self.spec, self.cfg, self.risk, self.journal,
-                                  mode, strategy)
-        # Restore compounded equity + any live position from the last run so a
-        # trade in progress survives a restart / redeploy.
+                                  mode, strategy, ledger=self.ledger)
+        # Restore any live position from the last run so a trade in progress
+        # survives a restart / redeploy (equity restores via the ledger).
         self.pm.load_state(self.pos_store.load(self.spec.key))
         self._last_pos_state = self.pm.to_state()
         self._stop = asyncio.Event()
@@ -240,9 +242,15 @@ class BybitManager:
         self.journal = Journal()
         self.state_store = BotState()
         self.pos_store = PositionStore()
+        # 한 계좌 원칙: 전 심볼이 이 원장 하나에서 돈이 나간다. 계좌 레코드가
+        # 아직 없으면 운영 심볼(BTC)의 레거시 심볼별 equity 를 1회 승계한다.
+        self.ledger = AccountLedger(cfg, AccountStore(),
+                                    legacy_equity=self.pos_store.load("BTC")
+                                    .get("equity"))
         self.risk = BybitRiskManager(cfg, self.journal, self.state_store)
         self.bots: dict[str, SymbolBot] = {
-            spec.key: SymbolBot(spec, cfg, self.journal, self.risk, self.pos_store)
+            spec.key: SymbolBot(spec, cfg, self.journal, self.risk,
+                                self.pos_store, self.ledger)
             for spec in enabled_symbols()
         }
         self.mode = "paper"
@@ -310,6 +318,7 @@ class BybitManager:
             "running": self.running,
             "mode": self.mode,
             "strategy": self.strategy_name,
+            "account": {"equity_usd": round(self.ledger.equity, 4)},
             "note": ("running: " + ",".join(self.bots)) if self.running else "stopped",
             "risk": self.risk.status(),
             "symbols": {k: b.status() for k, b in self.bots.items()},
