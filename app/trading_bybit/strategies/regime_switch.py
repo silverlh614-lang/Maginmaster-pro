@@ -21,11 +21,13 @@ from .range_box import RangeBoxStrategy
 from .trend_breakout import TrendBreakoutStrategy
 from .trendline import TrendlineStrategy
 
-# 하위 전략 후보 (registry를 import하면 순환이라 여기서 직접 매핑)
-_SUBS: dict[str, type[BybitStrategy]] = {
+# 하위 전략 후보 (registry를 import하면 순환이라 여기서 직접 매핑).
+# "none" = 해당 레짐에서는 관망 — 신규 진입 없음 (예: 횡보장 무매매).
+_SUBS: dict[str, type[BybitStrategy] | None] = {
     "trend_breakout": TrendBreakoutStrategy,
     "trendline": TrendlineStrategy,
     "range_box": RangeBoxStrategy,
+    "none": None,
 }
 
 
@@ -39,8 +41,9 @@ class RegimeSwitchStrategy(BybitStrategy):
             if name not in _SUBS:
                 raise ValueError(
                     f"{field}='{name}' 미지원 (가능: {list(_SUBS)})")
-        self.trend_sub = _SUBS[config.regime_trend_strategy](config)
-        self.range_sub = _SUBS[config.regime_range_strategy](config)
+        _make = lambda n: _SUBS[n](config) if _SUBS[n] is not None else None
+        self.trend_sub = _make(config.regime_trend_strategy)
+        self.range_sub = _make(config.regime_range_strategy)
 
     def _regime(self, ctx: BybitContext) -> tuple[str | None, float | None]:
         """('trend'|'range'|'neutral'|None, adx). None = ADX 워밍업 부족."""
@@ -73,8 +76,10 @@ class RegimeSwitchStrategy(BybitStrategy):
     def diagnose(self, ctx: BybitContext) -> dict | None:
         regime, v = self._regime(ctx)
         c = self.cfg
-        label = {"trend": f"추세장 → {self.trend_sub.name}",
-                 "range": f"횡보장 → {self.range_sub.name}",
+        t_name = self.trend_sub.name if self.trend_sub else "관망(none)"
+        r_name = self.range_sub.name if self.range_sub else "관망(none)"
+        label = {"trend": f"추세장 → {t_name}",
+                 "range": f"횡보장 → {r_name}",
                  "neutral": "관망 (dead zone)"}.get(regime, "ADX 워밍업")
         regime_gate = {
             "key": "regime", "label": "레짐 판별(HTF ADX)",

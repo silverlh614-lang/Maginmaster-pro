@@ -68,8 +68,8 @@ class BybitConfig:
     adx_period: int = 14
     adx_trend_min: float = 25.0          # HTF ADX ≥ 이면 추세장 → trend 전략
     adx_range_max: float = 20.0          # HTF ADX ≤ 이면 횡보장 → range 전략
-    regime_trend_strategy: str = "trend_breakout"   # 추세장 위임 전략
-    regime_range_strategy: str = "range_box"        # 횡보장 위임 전략
+    regime_trend_strategy: str = "trend_breakout"   # 추세장 위임 전략 ("none"=관망)
+    regime_range_strategy: str = "range_box"        # 횡보장 위임 전략 ("none"=관망)
 
     # --- System #2: risk management (ATR sizing) ---------------------------
     atr_period: int = 14

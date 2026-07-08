@@ -2,9 +2,10 @@
 
 Backtest engine. Fetches historical Bybit klines (entry + higher timeframe)
 and replays them bar-by-bar, rebuilding the exact BybitContext the live bot
-would have seen and driving the SAME PositionManager FSM. Risk daily caps are
-intentionally OFF (permissive gate) — the goal is raw strategy statistics,
-the Phase 2 gate that must pass before any live capital. Settlement is the
+would have seen and driving the SAME PositionManager FSM. Structural sizing
+caps (합산 오픈리스크) are ON so pyramiding matches live; operational daily
+caps/kill switch are OFF — raw strategy statistics for the Phase 2 gate that
+must pass before any live capital. Settlement is the
 FSM's own stop/target/trailing against each bar's high/low (no look-ahead).
 """
 from __future__ import annotations
@@ -77,8 +78,33 @@ class _MemJournal:
 
 
 class _PermissiveRisk:
-    """Backtest risk shim: no daily caps, no kill switch — raw stats only."""
+    """Fully permissive risk shim (kept for unit-test fixtures)."""
     def allow_entry(self, *a, **k):
+        return True, ""
+
+    def record_ok(self): ...
+    def record_error(self, e): ...
+
+
+class _StructuralRisk:
+    """Backtest risk shim: STRUCTURAL sizing caps ON, operational caps OFF.
+
+    라이브와 동일한 사이징 조건에서 raw stats를 얻기 위해 합산 오픈리스크
+    캡(애드업 스택 차단)은 켠다 — 이것을 끄면 라이브에서 불가능한 -5R짜리
+    피라미딩 손실이 통계에 섞인다. 일일 손실캡·거래수·킬스위치는 게이트
+    목적(전략 자체의 EV 측정)에 맞게 계속 끈 상태를 유지한다."""
+
+    def __init__(self, cfg: BybitConfig):
+        self.cfg = cfg
+
+    def allow_entry(self, open_positions: int, open_risk_usd: float,
+                    new_risk_usd: float, is_add: bool = False,
+                    equity_usd: float | None = None):
+        equity = equity_usd if equity_usd and equity_usd > 0 else self.cfg.equity_usd
+        cap = equity * self.cfg.max_total_open_risk_pct / 100.0
+        if open_risk_usd + new_risk_usd > cap + 1e-9:
+            return False, (f"total_open_risk would be "
+                           f"${open_risk_usd + new_risk_usd:.2f} > cap ${cap:.2f}")
         return True, ""
 
     def record_ok(self): ...
@@ -104,8 +130,8 @@ def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
         return {"trades": [], "closes": [], "equity_curve": [], "snapshots": 0}
 
     strategy = make_strategy(strategy_name, cfg)
-    pm = PositionManager(spec, cfg, _PermissiveRisk(), _MemJournal(), "backtest",
-                         strategy_name)
+    pm = PositionManager(spec, cfg, _StructuralRisk(cfg), _MemJournal(),
+                         "backtest", strategy_name)
     journal: _MemJournal = pm.journal   # type: ignore[assignment]
     entry_min = _interval_min(cfg.entry_interval)
     htf_min = _interval_min(cfg.htf_interval)
