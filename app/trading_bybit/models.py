@@ -102,6 +102,7 @@ class Position:
     multiple — the profit-ratio yardstick."""
     symbol: str
     side: Side
+    strategy: str = ""                 # 이 포지션을 연 전략 (정산 귀속 기준)
     units: list[Unit] = field(default_factory=list)
     initial_risk_usd: float = 0.0     # 1R, fixed at first fill
     target_price: float | None = None  # first take-profit (2R by default)
@@ -149,6 +150,7 @@ class Position:
     def as_dict(self) -> dict:
         return {
             "symbol": self.symbol, "side": self.side.value,
+            "strategy": self.strategy,
             "state": self.state.value, "units": len(self.units),
             "adds": self.adds, "open_qty": self.open_qty,
             "avg_entry": round(self.avg_entry, 4),

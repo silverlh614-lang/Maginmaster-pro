@@ -94,6 +94,30 @@ def test_structural_risk_caps_pyramiding():
     print("ok  structural risk shim (open-risk cap enforced in backtests)")
 
 
+def test_close_attributed_to_opening_strategy():
+    """정산 행은 포지션을 OPEN한 전략으로 귀속된다 — 재시작 후 다른 전략으로
+    돌아도 (regime_switch가 연 포지션이 trend_breakout으로 찍히던 회귀)."""
+    from app.trading_bybit.backtest.engine import _MemJournal, _PermissiveRisk
+    from app.trading_bybit.config import SYMBOL_SPECS, BybitConfig
+    from app.trading_bybit.execution.position import PositionManager
+    from app.trading_bybit.models import Side, TradeSignal
+
+    cfg = BybitConfig()
+    pm = PositionManager(SYMBOL_SPECS["BTC"], cfg, _PermissiveRisk(),
+                         _MemJournal(), "paper", "regime_switch")
+    sig = TradeSignal(Side.LONG, "T", 80, stop_price=98, entry_hint=100)
+    assert pm.try_open(sig, 100, 2.0, ts=1_700_000_000)
+    st = pm.to_state()
+    # 재시작: 다른 전략으로 뜬 PM이 같은 포지션을 복원해 정산하는 상황
+    pm2 = PositionManager(SYMBOL_SPECS["BTC"], cfg, _PermissiveRisk(),
+                          _MemJournal(), "paper", "trend_breakout")
+    pm2.load_state(st)
+    pm2.manage(_c(1_700_000_900_000, 100, 100.5, 97, 97.5), 2.0)   # stop → CLOSE
+    row = pm2.journal.rows[-1]
+    assert row["event"] == "CLOSE" and row["strategy"] == "regime_switch", row
+    print("ok  close rows attributed to the OPENING strategy (restart-safe)")
+
+
 if __name__ == "__main__":
     test_single_page_enough()
     test_pagination_past_1000()
@@ -101,4 +125,5 @@ if __name__ == "__main__":
     test_empty_venue()
     test_backtest_rows_carry_bar_time()
     test_structural_risk_caps_pyramiding()
+    test_close_attributed_to_opening_strategy()
     print("\nall history pagination tests passed ✅")

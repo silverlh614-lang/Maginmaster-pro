@@ -125,7 +125,8 @@ class PositionManager:
         fee = self._fee(entry * qty)
         unit = Unit(side=sig.side, entry_price=entry, qty=qty, stop_price=stop,
                     entry_ts=ts, fee_usd=fee)
-        self.pos = Position(symbol=self.spec.key, side=sig.side, units=[unit],
+        self.pos = Position(symbol=self.spec.key, side=sig.side,
+                            strategy=self.strategy_name, units=[unit],
                             initial_risk_usd=risk_usd,
                             target_price=self._round_price(target))
         self.pos.realized_fee_usd = fee
@@ -286,7 +287,9 @@ class PositionManager:
         self.journal.append({
             "ts": ts_iso,
             "symbol": self.spec.key, "mode": self.mode,
-            "strategy": self.strategy_name,
+            # 귀속은 포지션을 연 전략 기준 — 재시작·전략 변경 후 정산돼도
+            # OPEN 시점의 전략으로 기록된다 (없으면 현재 전략 폴백)
+            "strategy": (p.strategy if p and p.strategy else self.strategy_name),
             "event": event, "side": (sig.side.value if sig else (p.side.value if p else "")),
             "signal_type": sig.signal_type if sig else "",
             "signal_detail": sig.detail if sig else "",
@@ -332,7 +335,7 @@ def _unit_from_dict(d: dict) -> Unit:
 
 
 def _pos_to_dict(p: Position) -> dict:
-    return {"symbol": p.symbol, "side": p.side.value,
+    return {"symbol": p.symbol, "side": p.side.value, "strategy": p.strategy,
             "units": [_unit_to_dict(u) for u in p.units],
             "initial_risk_usd": p.initial_risk_usd,
             "target_price": p.target_price, "trail_price": p.trail_price,
@@ -345,6 +348,7 @@ def _pos_to_dict(p: Position) -> dict:
 def _pos_from_dict(d: dict) -> Position:
     return Position(
         symbol=d["symbol"], side=Side(d["side"]),
+        strategy=d.get("strategy", ""),
         units=[_unit_from_dict(u) for u in d.get("units", [])],
         initial_risk_usd=d.get("initial_risk_usd", 0.0),
         target_price=d.get("target_price"), trail_price=d.get("trail_price"),
