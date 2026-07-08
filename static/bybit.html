@@ -546,7 +546,12 @@ async function loadCycle(){
     $("cyPhase").innerHTML=`<span class="${cls}">${label}</span>`+
       (f.fired!=null?` <span class="muted">(트랜치 ${f.fired}/${f.ladder_tranches})</span>`:"");
   }
-  if(s&&s.snapshot_date)$("cySnap").textContent=s.snapshot_date+" (재검증 필요 시 /refresh-snapshot)";
+  if(s&&s.snapshot_date){
+    const age=s.snapshot_age_days;
+    const badge=age==null?"":` · <span class="${age>=45?'dn':age>=21?'':'muted'}">${age}일 경과${age>=45?" ⚠ 재검증 권장":""}</span>`;
+    $("cySnap").innerHTML=s.snapshot_date+badge;
+    $("cySnap").title="실현가격·ATH 앵커 기준일 (200주선은 자동 갱신). 재검증: /refresh-snapshot";
+  }
 }
 
 // ---- 복리 EQUITY 스파크라인 (저널 청산 누적 → 시작금 기준선 대비) ----
@@ -779,7 +784,9 @@ async function refresh(){
     aboveRp=btcPx>=snap.realized_price; aboveMa=btcPx>=snap.ma_200w;
     const dRp=(btcPx/snap.realized_price-1)*100, dMa=(btcPx/snap.ma_200w-1)*100;
     $("cyRp").innerHTML=`<span class="${aboveRp?'up':'dn'}">${aboveRp?'▲ 위':'▼ 아래'} ${fmt(Math.abs(dRp),1)}%</span> <span class="muted">(${money(snap.realized_price)})</span>`;
-    $("cyMa").innerHTML=`<span class="${aboveMa?'up':'dn'}">${aboveMa?'▲ 위':'▼ 아래'} ${fmt(Math.abs(dMa),1)}%</span> <span class="muted">(${money(snap.ma_200w)})</span>`;
+    const maTag=snap.ma_200w_live?`<span class="muted" title="주봉 종가 자동 산출 · ${snap.ma_200w_as_of||""}">· 자동</span>`
+      :`<span class="dn" title="공개 kline 실패 — 스냅샷 앵커">· 앵커</span>`;
+    $("cyMa").innerHTML=`<span class="${aboveMa?'up':'dn'}">${aboveMa?'▲ 위':'▼ 아래'} ${fmt(Math.abs(dMa),1)}%</span> <span class="muted">(${money(snap.ma_200w)})</span> ${maTag}`;
   }
 
   // ---- 이벤트 알림: 직전 폴과 diff — 탭과 무관하게 전 심볼 감시 (첫 폴은 기준만) ----
