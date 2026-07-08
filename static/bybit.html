@@ -849,21 +849,23 @@ async function loadJournal(){let d;try{d=await api("/api/bybit/trades?limit=120"
       <span class="fb ${cls}">${res}</span>
       <span class="fd"><b>${r.symbol||""} ${r.side||""}</b> ${fmt(r.entry_price,1)}→${fmt(r.exit_price,1)} · ${r.r_multiple?fmt(r.r_multiple,2)+"R":""}</span>
       <span class="fp ${pnl>=0?'up':'dn'}">${money(pnl)}</span></div>`;}).join(""):'<div class="note">거래 없음</div>';
-  // journal table
+  // journal table — 신호 상세에 "<EMA5" 같은 텍스트가 있어 반드시 이스케이프
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   $("jbody").innerHTML=rows.length?rows.slice().reverse().slice(0,120).map(r=>{
     const side=r.side||"";const scls=side==="LONG"?"long":side==="SHORT"?"short":"";
-    const res=r.result||"";const rcls=res==="WIN"?"up":res==="LOSS"?"dn":"muted";
+    const res=r.result||(r.event==="PARTIAL"?"부분익절":"");
+    const rcls=res==="WIN"?"up":res==="LOSS"?"dn":"muted";
     const pnl=r.pnl_usd===""?"":money(Number(r.pnl_usd));
     return `<tr><td class="l muted">${(r.ts||"").slice(5,19).replace("T"," ")}</td>
-      <td class="l">${r.symbol||""}</td>
-      <td class="l">${r.event||""}</td>
+      <td class="l">${esc(r.symbol||"")}</td>
+      <td class="l">${esc(r.event||"")}</td>
       <td class="l">${side?`<span class="tag ${scls}">${side}</span>`:""}</td>
       <td>${fmt(r.entry_price,2)}</td><td>${r.exit_price?fmt(r.exit_price,2):"–"}</td>
       <td>${fmt(r.qty,4)}</td><td>${r.leverage?fmt(r.leverage,1)+"x":"–"}</td>
-      <td class="${rcls}">${res||"–"}</td>
+      <td class="${rcls}">${esc(res)||"–"}</td>
       <td class="${Number(r.pnl_usd)>=0?'up':'dn'}">${pnl||"–"}</td>
-      <td>${r.r_multiple?fmt(r.r_multiple,2):"–"}</td>
-      <td class="l muted" title="${r.reason||""}">${(r.signal_detail||r.reason||"").slice(0,44)}</td></tr>`;
+      <td>${r.r_multiple!==""&&r.r_multiple!=null?fmt(r.r_multiple,2):"–"}</td>
+      <td class="l muted" title="${esc(r.reason||"")}">${esc((r.signal_detail||r.reason||"").slice(0,60))}</td></tr>`;
   }).join(""):'<tr><td class="l muted" colspan="12">거래 없음</td></tr>';
 }
 

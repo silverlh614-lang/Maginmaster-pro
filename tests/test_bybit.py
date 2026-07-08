@@ -154,7 +154,11 @@ def test_fsm_partial_then_trail():
     # journal: exactly one settled CLOSE row (no double counting the partial)
     agg = pm.journal.aggregate()
     assert agg["trades"] == 1 and agg["settled"] == 1, agg
-    print("ok  fsm partial + trailing + single settled row")
+    # PARTIAL row records its own realized cash + leg R (result stays blank)
+    prow = next(r for r in pm.journal.tail(10) if r["event"] == "PARTIAL")
+    assert prow["result"] == "" and float(prow["pnl_usd"]) > 0, prow
+    assert float(prow["r_multiple"]) > 0, prow
+    print("ok  fsm partial + trailing + single settled row + partial pnl logged")
 
 
 def test_fsm_pyramiding():
