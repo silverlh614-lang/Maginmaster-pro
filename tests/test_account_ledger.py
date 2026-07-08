@@ -88,8 +88,13 @@ def test_manager_wiring():
     mgr = BybitManager(BybitConfig())
     assert all(b.ledger is mgr.ledger for b in mgr.bots.values())
     st = mgr.status()
-    assert abs(st["account"]["equity_usd"] - mgr.ledger.equity) < 1e-9
-    print("ok  manager wiring (one ledger for all bots, account in status)")
+    acct = st["account"]
+    assert abs(acct["equity_usd"] - mgr.ledger.equity) < 1e-9
+    assert acct["start_equity_usd"] == mgr.cfg.equity_usd
+    assert acct["unrealized_usd"] is None          # 열린 포지션 없음
+    assert abs(acct["mark_value_usd"] - acct["equity_usd"]) < 1e-9
+    assert "trades" in acct["aggregate"]           # 전 심볼 실현 집계
+    print("ok  manager wiring (one ledger for all bots, account view in status)")
 
 
 if __name__ == "__main__":

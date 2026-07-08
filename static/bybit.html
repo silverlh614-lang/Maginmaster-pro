@@ -705,17 +705,20 @@ async function refresh(){
   const b=(s.symbols||{})[SYM]; if(!b)return;
   const mgr=b.manager||{}, col=b.collector||{}, dg=b.diagnostics;
   window._feed=col;   // {source,last_error,entry_bars,...} for the chart placeholder
-  const eq=mgr.equity_usd, px=col.last_price;
+  // ---- ACCOUNT 패널: 한 계좌 — 어느 탭에서든 전 심볼 합산 계좌 뷰 ----
+  const acct=s.account||{};
+  const eq=acct.equity_usd!=null?acct.equity_usd:mgr.equity_usd, px=col.last_price;
   $("sEquity").textContent=money(eq);$("equityBig").textContent=money(eq);
-  const agg=(s.by_symbol&&s.by_symbol[SYM])||{};
-  $("equityBig").className="meganum"+((agg.pnl_usd||0)<0?" neg-glow":"");
-  $("equityBig").style.color=(agg.pnl_usd||0)>=0?"var(--up)":"var(--dn)";
+  const agg=acct.aggregate||((s.by_symbol&&s.by_symbol[SYM])||{});
+  const delta=(eq!=null&&acct.start_equity_usd!=null)?(eq-acct.start_equity_usd):(agg.pnl_usd||0);
+  $("equityBig").className="meganum"+(delta<0?" neg-glow":"");
+  $("equityBig").style.color=delta>=0?"var(--up)":"var(--dn)";
   $("equitySub").textContent="실현손익 "+money(agg.pnl_usd||0)+" · "+(agg.settled||0)+"청산";
-  $("eqPath").textContent=eq!=null&&agg.pnl_usd!=null?("시작 대비 "+money(agg.pnl_usd)):"–";
-  // 평가액 = 복리 EQUITY + 미실현 (포지션 열려 있을 때 실시간으로 움직임)
-  const _pos=mgr.position, _ur=(_pos&&_pos.state==="OPEN"&&_pos.unrealized_usd!=null)?_pos.unrealized_usd:null;
+  $("eqPath").textContent=eq!=null?("시작 대비 "+money(delta)):"–";
+  // 평가액 = 계좌 EQUITY + 전 심볼 미실현 합 (열린 포지션 전체 실시간)
+  const _ur=acct.unrealized_usd;
   if(eq!=null&&_ur!=null){
-    $("equityMark").textContent="평가액 "+money(eq+_ur)+" (미실현 "+money(_ur)+")";
+    $("equityMark").textContent="평가액 "+money(eq+_ur)+" (미실현 "+money(_ur)+" · 전 심볼)";
     $("equityMark").style.color=_ur>=0?"var(--up)":"var(--dn)";
   }else{
     $("equityMark").textContent="평가액 = EQUITY (미실현 없음)";
