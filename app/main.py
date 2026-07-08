@@ -89,11 +89,27 @@ def healthz():
 
 @app.get("/api/snapshot")
 def get_snapshot():
-    return {
-        **snapshot.as_dict(),
-        "warning": "[SNAPSHOT] values are time-sensitive; re-verify and override "
-                   "via env vars (REALIZED_PRICE, MA_200W, SPOT, ATH, SNAPSHOT_DATE).",
-    }
+    from datetime import date
+
+    from . import cycle_rails
+    d = snapshot.as_dict()
+    # 200주선은 주봉 종가 SMA — 공개 kline 으로 실시간 산출 (실패 시 앵커 폴백).
+    # 실현가격은 온체인 집계라 그대로 env 앵커 유지.
+    ma = cycle_rails.get_ma_200w()
+    d["ma_200w"] = ma["value"]
+    d["ma_200w_live"] = ma["live"]
+    d["ma_200w_source"] = ma["source"]
+    d["ma_200w_as_of"] = ma["as_of"]
+    # 앵커(실현가격·ATH) 기준일이 며칠 지났는지 — 재검증 유도용 신선도 표시.
+    try:
+        age = (date.today() - date.fromisoformat(snapshot.SNAPSHOT_DATE)).days
+        d["snapshot_age_days"] = max(age, 0)
+    except ValueError:
+        d["snapshot_age_days"] = None
+    d["warning"] = ("[SNAPSHOT] values are time-sensitive; re-verify and override "
+                    "via env vars (REALIZED_PRICE, SPOT, ATH, SNAPSHOT_DATE). "
+                    "MA_200W is auto-derived from weekly klines when available.")
+    return d
 
 
 @app.get("/api/price")
