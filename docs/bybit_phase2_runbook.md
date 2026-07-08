@@ -94,8 +94,11 @@ Service → **Volumes → New Volume** → Mount path `/data` (`DATA_DIR` 기본
 APP=https://<앱>.up.railway.app
 curl -s -X POST $APP/api/bybit/backtest \
   -H "Content-Type: application/json" \
-  -d '{"symbol":"BTC","strategy":"trend_breakout","overrides":{}}' | python -m json.tool
+  -d '{"symbol":"BTC","strategy":"trend_breakout","days":90,"overrides":{}}' | python -m json.tool
 ```
+
+`days`(기본 10, 최대 365)로 리플레이 기간을 지정한다 — 페이지네이션 fetch가
+1000봉 페이지를 이어받아 표본을 확보한다 (UI에서는 기간 셀렉터).
 
 **방법 ⓒ 파라미터 스윕**:
 ```bash
@@ -124,10 +127,10 @@ done
 **통과 = `expectancy_r>0` AND `PF≥1.2` AND `trades≥20` AND MDD 감내 가능.**
 손으로 임계값을 맞추지 말고, 여러 파라미터에서 **반복 재현되는** 조합만 채택(불변식).
 
-> ⚠️ **히스토리 한계**: Phase 1 백테스트는 호출 시 Bybit 공개 kline을 실시간으로 받는다.
-> 공개 API는 요청당 **최대 1000봉** → 15m ≈ **10일**, 1h ≈ **41일**. 표본이 짧으면 방향성
-> 판단용. `trades`가 한 자릿수면 아직 게이트 판정 불가 → 페이퍼를 오래 돌려 캔들 아카이브를
-> 쌓는 확장이 다음 과제.
+> ⚠️ **히스토리**: 백테스트는 호출 시 Bybit 공개 kline을 페이지네이션으로 받는다
+> (요청당 1000봉 → `days` 만큼 이어받기, 15m 기준 90일 ≈ 9페이지). `days`가 길수록
+> 다운로드가 오래 걸리니 UI 타임아웃이 나면 기간을 줄여라. `trades`가 한 자릿수면
+> 게이트 판정 불가 — 기간을 늘리거나 여러 심볼로 표본을 확보한다.
 
 ## 8. 결과 공유
 

@@ -106,6 +106,7 @@ class BacktestRequest(BaseModel):
     symbol: str = "BTC"
     strategy: str = "trend_breakout"
     overrides: dict[str, float | str] = {}
+    days: float = 10.0    # replay window — paginated fetch past the 1000-bar cap
 
 
 @router.post("/backtest")
@@ -133,11 +134,15 @@ def backtest(req: BacktestRequest):
         except (TypeError, ValueError):
             raise HTTPException(422, f"bad value for '{k}': {v!r}")
         setattr(cfg, k, val)
+    from .backtest.engine import _interval_min
+    days = min(max(req.days, 1.0), 365.0)
+    bars = max(200, int(days * 1440 / _interval_min(cfg.entry_interval)))
     try:
-        r = replay(req.symbol, req.strategy, cfg)
+        r = replay(req.symbol, req.strategy, cfg, bars=bars)
     except Exception as e:
         raise HTTPException(502, f"backtest fetch/replay failed: {e}")
     return {"symbol": req.symbol.upper(), "strategy": req.strategy,
+            "days": days, "bars": bars,
             "metrics": compute(r["closes"], cfg.equity_usd, r.get("final_equity", cfg.equity_usd)),
             "final_equity": r.get("final_equity"),
             "snapshots": r["snapshots"], "trades": len(r["closes"]),
