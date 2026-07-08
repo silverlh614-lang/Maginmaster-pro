@@ -182,6 +182,18 @@ def test_regime_switch_routing():
     print("ok  regime switch (range/trend routing, dead zone, bad sub name)")
 
 
+def test_regime_none_option():
+    """regime_range_strategy='none' → 횡보장에서는 관망 (신규 진입 없음)."""
+    cfg = BybitConfig()
+    cfg.regime_range_strategy = "none"
+    strat = make_strategy("regime_switch", cfg)
+    entry_long = _triangle_entry(39) + [_c(39 * 900000, 100.2, 101.5, 99.2, 101.0)]
+    assert strat.evaluate(_ctx(_flat_htf(30), entry_long)) is None
+    d = strat.diagnose(_ctx(_flat_htf(30), entry_long))
+    assert d and not d["ready"] and "관망" in d["gates"][0]["info"], d
+    print("ok  regime none option (횡보장 관망 — no entries)")
+
+
 # ------------------------------------------------------------- integration
 
 def test_registry_and_backtest_replay():
@@ -201,5 +213,6 @@ if __name__ == "__main__":
     test_trendline_bounce_long()
     test_range_box_long_short()
     test_regime_switch_routing()
+    test_regime_none_option()
     test_registry_and_backtest_replay()
     print("\nall strategy tests passed ✅")

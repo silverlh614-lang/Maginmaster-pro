@@ -80,10 +80,25 @@ def test_backtest_rows_carry_bar_time():
     print("ok  backtest journal rows carry bar timestamps (ISO)")
 
 
+def test_structural_risk_caps_pyramiding():
+    """백테스트 리스크 심은 합산 오픈리스크 캡을 라이브와 동일하게 집행해야
+    한다 — 캡을 넘는 애드업 스택(-5R급 손실의 원인)은 차단."""
+    from app.trading_bybit.backtest.engine import _StructuralRisk
+    from app.trading_bybit.config import BybitConfig
+
+    r = _StructuralRisk(BybitConfig())            # cap 2% = $4 on $200
+    assert r.allow_entry(0, 0.0, 2.0, equity_usd=200.0)[0]
+    assert r.allow_entry(1, 2.0, 2.0, is_add=True, equity_usd=200.0)[0]
+    ok, why = r.allow_entry(1, 4.0, 2.0, is_add=True, equity_usd=200.0)
+    assert not ok and "total_open_risk" in why, why
+    print("ok  structural risk shim (open-risk cap enforced in backtests)")
+
+
 if __name__ == "__main__":
     test_single_page_enough()
     test_pagination_past_1000()
     test_venue_exhausted_early()
     test_empty_venue()
     test_backtest_rows_carry_bar_time()
+    test_structural_risk_caps_pyramiding()
     print("\nall history pagination tests passed ✅")
