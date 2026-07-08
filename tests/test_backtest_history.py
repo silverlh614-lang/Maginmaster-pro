@@ -61,9 +61,29 @@ def test_empty_venue():
     print("ok  empty venue → empty list, no crash")
 
 
+def test_backtest_rows_carry_bar_time():
+    """CSV 내보내기용 trade_rows 에는 이벤트가 발생한 BAR 시각(ts, ISO)이
+    찍혀야 한다 — 라이브 저널은 기록 시각 폴백 유지."""
+    from app.trading_bybit.backtest.engine import _MemJournal, _PermissiveRisk
+    from app.trading_bybit.config import SYMBOL_SPECS, BybitConfig
+    from app.trading_bybit.execution.position import PositionManager
+    from app.trading_bybit.models import Side, TradeSignal
+
+    pm = PositionManager(SYMBOL_SPECS["BTC"], BybitConfig(), _PermissiveRisk(),
+                         _MemJournal(), "backtest", "t")
+    sig = TradeSignal(Side.LONG, "T", 80, stop_price=98, entry_hint=100)
+    assert pm.try_open(sig, 100, 2.0, ts=1_700_000_000)        # 2023-11-14 UTC
+    pm.manage(_c(1_700_000_900_000, 100, 100.5, 97, 97.5), 2.0)  # stop -> CLOSE
+    rows = pm.journal.rows
+    assert rows[0]["event"] == "OPEN" and rows[0]["ts"].startswith("2023-11-14"), rows[0]
+    assert rows[-1]["event"] == "CLOSE" and rows[-1]["ts"].startswith("2023-11-14"), rows[-1]
+    print("ok  backtest journal rows carry bar timestamps (ISO)")
+
+
 if __name__ == "__main__":
     test_single_page_enough()
     test_pagination_past_1000()
     test_venue_exhausted_early()
     test_empty_venue()
+    test_backtest_rows_carry_bar_time()
     print("\nall history pagination tests passed ✅")
