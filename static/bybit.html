@@ -68,6 +68,31 @@
 
   .wrap{max-width:1440px;margin:0 auto;padding:10px 12px 74px}
   .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+  /* 화면 배치 편집: order 로 재배열, .phidden 으로 숨김 */
+  .panel.phidden{display:none!important}
+  .lay-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:60}
+  .lay-ov.show{display:flex;align-items:flex-end;justify-content:center}
+  .lay-sheet{width:100%;max-width:560px;max-height:78vh;overflow-y:auto;background:var(--panel);
+    border:1px solid var(--border);border-radius:10px 10px 0 0;padding:12px 14px 18px}
+  .lay-head{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px;
+    letter-spacing:.08em;margin-bottom:4px}
+  .lay-head .sp{flex:1}
+  .lay-btn{background:#10151b;border:1px solid var(--border);color:var(--dim);border-radius:4px;
+    padding:6px 10px;font-size:11px;cursor:pointer}
+  .lay-hint{color:var(--faint);font-size:10.5px;margin-bottom:10px}
+  .lay-row{display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid var(--border)}
+  .lay-row:last-child{border-bottom:0}
+  .lay-row .nm{flex:1;font-size:12.5px}
+  .lay-row .nm.off{color:var(--faint);text-decoration:line-through}
+  .lay-mv{background:#10151b;border:1px solid var(--border);color:var(--ink);border-radius:4px;
+    width:38px;height:34px;font-size:14px;cursor:pointer}
+  .lay-mv:disabled{opacity:.25;cursor:default}
+  .lay-sw{position:relative;width:42px;height:24px;flex:none;appearance:none;background:#1a2129;
+    border:1px solid var(--border);border-radius:12px;cursor:pointer;transition:background .15s}
+  .lay-sw:checked{background:var(--up)}
+  .lay-sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+    background:#e8edf2;transition:left .15s}
+  .lay-sw:checked::after{left:20px}
   .panel{grid-column:span 4;background:var(--panel);border:1px solid var(--border);
     border-radius:4px;min-width:0;display:flex;flex-direction:column}
   .panel.full{grid-column:1/-1} .panel.half{grid-column:span 6}
@@ -271,7 +296,19 @@
     <button class="stop" id="btnKill" style="display:none" onclick="resetKill()">KILL RESET</button>
   </span>
   <button class="bell" id="bellBtn" onclick="toggleAlerts()" title="알림 토글">🔔</button>
+  <button class="bell" id="layoutBtn" onclick="openLayout()" title="화면 배치 편집">🧩</button>
   <a href="/model" style="font-size:11px">BTC 모델 →</a>
+</div>
+
+<!-- 화면 배치 편집 시트 (이 기기 localStorage 에만 저장) -->
+<div class="lay-ov" id="layOv">
+  <div class="lay-sheet">
+    <div class="lay-head">🧩 화면 배치 <span class="sp"></span>
+      <button class="lay-btn" onclick="resetLayout()">기본값 복원</button>
+      <button class="lay-btn" onclick="closeLayout()">✕ 닫기</button></div>
+    <div class="lay-hint">▲▼ 순서 이동 · 스위치 표시/숨김 — 즉시 적용되고 이 기기에 저장됩니다.</div>
+    <div id="layRows"></div>
+  </div>
 </div>
 
 <div class="ticker"><div class="rail" id="rail"><span class="it">로딩 중…</span></div></div>
@@ -283,7 +320,7 @@
 
   <div class="grid">
     <!-- 계좌 -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="account" data-pname="계좌 (ACCOUNT)">
       <div class="phead"><span class="mk">◆</span> ACCOUNT (PAPER) <span class="sp"></span>
         <span class="r"><span class="tag paper">PAPER-SIM</span></span></div>
       <div class="pbody">
@@ -306,7 +343,7 @@
     </section>
 
     <!-- 라이브 차트 -->
-    <section class="panel col8">
+    <section class="panel col8" data-panel="chart" data-pname="라이브 차트">
       <div class="phead"><span class="mk">◆</span> 라이브 차트 · 15m + 5EMA + 박스 + 포지션
         <span class="sp"></span><span class="r" id="chTf">BTCUSDT</span></div>
       <div class="pbody" style="padding:0">
@@ -326,7 +363,7 @@
     </section>
 
     <!-- 시그널 게이트 -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="gates" data-pname="시그널 게이트">
       <div class="phead"><span class="mk">◆</span> 시그널 게이트 <span class="sp"></span>
         <span class="r" id="gDir">–</span></div>
       <div class="pbody">
@@ -345,7 +382,7 @@
     </section>
 
     <!-- 포지션 / R-ladder -->
-    <section class="panel col8">
+    <section class="panel col8" data-panel="position" data-pname="포지션 · R-ladder">
       <div class="phead"><span class="mk">◆</span> 포지션 · 사이클 · R-ladder <span class="sp"></span>
         <span class="r" id="posSide">FLAT</span></div>
       <div class="pbody">
@@ -355,7 +392,7 @@
     </section>
 
     <!-- 리스크 규칙 -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="risk" data-pname="리스크 규칙">
       <div class="phead"><span class="mk">◆</span> 리스크 규칙 (하드캡)</div>
       <div class="pbody">
         <div class="row"><span class="l">레버리지</span><span class="v" id="cLev">–</span></div>
@@ -369,7 +406,7 @@
     </section>
 
     <!-- 데이터 피드 -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="datafeed" data-pname="데이터 피드">
       <div class="phead"><span class="mk">◆</span> 데이터 피드 (Bybit v5)</div>
       <div class="pbody">
         <div class="row"><span class="l">소스</span><span class="v" id="fSrc">–</span></div>
@@ -383,7 +420,7 @@
     </section>
 
     <!-- 사이클 컨텍스트 (Part 1~3 모델 연동 — 표시 전용, 매매 로직 무개입) -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="cycle" data-pname="사이클 컨텍스트">
       <div class="phead"><span class="mk">◆</span> 사이클 컨텍스트 <span class="sp"></span>
         <span class="r"><a href="/model" style="font-size:10px">모델 →</a></span></div>
       <div class="pbody">
@@ -397,7 +434,7 @@
     </section>
 
     <!-- 백테스트 -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="backtest" data-pname="백테스트 게이트">
       <div class="phead"><span class="mk">◆</span> 백테스트 게이트 (Phase 2)</div>
       <div class="pbody">
         <div class="note">Bybit 과거 kline 리플레이 → 승률·R기대값·PF·MDD</div>
@@ -411,13 +448,13 @@
     </section>
 
     <!-- 체결 피드 -->
-    <section class="panel col-4">
+    <section class="panel col-4" data-panel="fills" data-pname="체결 피드">
       <div class="phead"><span class="mk">◆</span> 체결 피드</div>
       <div class="pbody"><div class="feed" id="feed"><div class="note">거래 없음</div></div></div>
     </section>
 
     <!-- 저널 -->
-    <section class="panel full">
+    <section class="panel full" data-panel="journal" data-pname="트레이드 저널">
       <div class="phead"><span class="mk">◆</span> 트레이드 저널 <span class="sp"></span>
         <span class="r"><a class="dl" id="csvBtn" href="/api/bybit/trades.csv" download>⬇ CSV</a></span></div>
       <div class="pbody">
@@ -896,7 +933,51 @@ async function runBacktest(){$("btOut").textContent="리플레이 중… (Bybit 
       <br><span class="muted" style="font-size:10px">${d.snapshots} 바 평가 · 최종자산 ${money(d.final_equity)}</span>`;
   }catch(e){$("btOut").innerHTML='<span class="dn">실패: '+e.message+'</span>';}}
 
-renderBell();loadConfig();refresh();loadCandles();loadJournal();loadCycle();
+// ---- 화면 배치 편집 (order/숨김 → localStorage, 서버 무관 이 기기 전용) ----
+const LAYOUT_KEY="bybit_layout_v1";
+function _panels(){return [...document.querySelectorAll(".grid>.panel[data-panel]")];}
+function _loadLay(){try{return JSON.parse(localStorage.getItem(LAYOUT_KEY))||{}}catch(e){return{}}}
+function _saveLay(l){try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(l))}catch(e){}}
+function _effOrder(){
+  // 저장된 순서 중 실존 패널만 + 저장에 없는 신규 패널은 DOM 순서대로 뒤에
+  const ids=_panels().map(p=>p.dataset.panel), saved=(_loadLay().order||[]).filter(id=>ids.includes(id));
+  return saved.concat(ids.filter(id=>!saved.includes(id)));
+}
+function applyLayout(){
+  const order=_effOrder(), hidden=new Set(_loadLay().hidden||[]);
+  _panels().forEach(p=>{const id=p.dataset.panel;
+    p.style.order=order.indexOf(id);
+    p.classList.toggle("phidden",hidden.has(id));});
+}
+function renderLayoutRows(){
+  const order=_effOrder(), hidden=new Set(_loadLay().hidden||[]);
+  const byId={};_panels().forEach(p=>byId[p.dataset.panel]=p);
+  $("layRows").innerHTML=order.map((id,i)=>{
+    const on=!hidden.has(id), nm=(byId[id]&&byId[id].dataset.pname)||id;
+    return `<div class="lay-row">
+      <button class="lay-mv" onclick="movePanel('${id}',-1)" ${i===0?"disabled":""}>▲</button>
+      <button class="lay-mv" onclick="movePanel('${id}',1)" ${i===order.length-1?"disabled":""}>▼</button>
+      <span class="nm ${on?"":"off"}">${nm}</span>
+      <input type="checkbox" class="lay-sw" ${on?"checked":""} onchange="togglePanel('${id}')">
+    </div>`;}).join("");
+}
+function movePanel(id,dir){
+  const order=_effOrder(), i=order.indexOf(id), j=i+dir;
+  if(i<0||j<0||j>=order.length)return;
+  [order[i],order[j]]=[order[j],order[i]];
+  const l=_loadLay();l.order=order;_saveLay(l);applyLayout();renderLayoutRows();
+}
+function togglePanel(id){
+  const l=_loadLay(), hidden=new Set(l.hidden||[]);
+  hidden.has(id)?hidden.delete(id):hidden.add(id);
+  l.hidden=[...hidden];_saveLay(l);applyLayout();renderLayoutRows();
+}
+function resetLayout(){localStorage.removeItem(LAYOUT_KEY);applyLayout();renderLayoutRows();}
+function openLayout(){renderLayoutRows();$("layOv").classList.add("show");}
+function closeLayout(){$("layOv").classList.remove("show");}
+$("layOv").addEventListener("click",e=>{if(e.target.id==="layOv")closeLayout();});
+
+applyLayout();renderBell();loadConfig();refresh();loadCandles();loadJournal();loadCycle();
 setInterval(loadCycle,60000);
 setInterval(refresh,2500);
 setInterval(loadCandles,7000);
