@@ -24,23 +24,46 @@ def _interval_min(interval: str) -> int:
     return table.get(interval, int(interval))
 
 
-def fetch_klines(symbol: str, interval: str, limit: int = 1000) -> list[Candle]:
-    """Public Bybit klines, oldest→newest, forming bar dropped."""
+PAGE_LIMIT = 1000        # Bybit v5 kline hard cap per request
+
+
+def _fetch_page(symbol: str, interval: str, end_ms: int | None) -> list[Candle]:
+    """One public kline page (≤1000 bars), any order. end_ms bounds the page
+    (inclusive); None = newest page."""
     import httpx    # lazy: keeps the module importable in offline tests
     params = {"category": "linear", "symbol": symbol, "interval": interval,
-              "limit": min(limit, 1000)}
+              "limit": PAGE_LIMIT}
+    if end_ms is not None:
+        params["end"] = end_ms
     with httpx.Client(timeout=15, headers={"User-Agent": "coinmaster-pro"}) as c:
         r = c.get(BYBIT_REST, params=params)
         r.raise_for_status()
         data = r.json()
     if data.get("retCode") != 0:
         raise ValueError(f"bybit retCode {data.get('retCode')}: {data.get('retMsg')}")
-    rows = data.get("result", {}).get("list", [])
-    out = [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
-                  low=float(x[3]), close=float(x[4]), volume=float(x[5]))
-           for x in rows]
-    out.sort(key=lambda c: c.ts_ms)
-    return out[:-1] if out else out          # drop the still-forming bar
+    return [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
+                   low=float(x[3]), close=float(x[4]), volume=float(x[5]))
+            for x in data.get("result", {}).get("list", [])]
+
+
+def fetch_history(symbol: str, interval: str, bars: int,
+                  fetch_page=_fetch_page) -> list[Candle]:
+    """Up to `bars` CLOSED klines, oldest→newest, paginated past the venue's
+    1000-bar page cap by walking backwards (end = oldest_ts - 1). Stops early
+    when the venue has no older history. Phase 2 게이트의 표본 확보 통로."""
+    by_ts: dict[int, Candle] = {}
+    end_ms: int | None = None
+    while len(by_ts) < bars + 1:             # +1: forming newest bar dropped below
+        page = fetch_page(symbol, interval, end_ms)
+        if not page:
+            break
+        for c in page:
+            by_ts[c.ts_ms] = c
+        if len(page) < PAGE_LIMIT:            # venue exhausted — no older bars
+            break
+        end_ms = min(c.ts_ms for c in page) - 1
+    out = sorted(by_ts.values(), key=lambda c: c.ts_ms)
+    return out[:-1][-bars:] if out else out   # drop forming bar, keep newest N
 
 
 class _MemJournal:
@@ -64,14 +87,19 @@ class _PermissiveRisk:
 
 def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
            entry_candles: list[Candle] | None = None,
-           htf_candles: list[Candle] | None = None) -> dict:
-    """Replay one symbol. Candles can be injected (offline tests) or fetched.
-    Returns {trades, closes, equity_curve, snapshots}."""
+           htf_candles: list[Candle] | None = None,
+           bars: int = 1000) -> dict:
+    """Replay one symbol. Candles can be injected (offline tests) or fetched
+    (paginated, `bars` entry-TF bars). Returns {trades, closes, equity_curve,
+    snapshots}."""
     spec: SymbolSpec = SYMBOL_SPECS[symbol.upper()]
     if entry_candles is None:
-        entry_candles = fetch_klines(spec.symbol, cfg.entry_interval)
+        entry_candles = fetch_history(spec.symbol, cfg.entry_interval, bars)
     if htf_candles is None:
-        htf_candles = fetch_klines(spec.symbol, cfg.htf_interval)
+        # HTF must cover the same span plus indicator warmup (ADX 등)
+        span = _interval_min(cfg.entry_interval) * bars
+        htf_bars = span // _interval_min(cfg.htf_interval) + 2 * (2 * cfg.adx_period + 1)
+        htf_candles = fetch_history(spec.symbol, cfg.htf_interval, htf_bars)
     if not entry_candles or not htf_candles:
         return {"trades": [], "closes": [], "equity_curve": [], "snapshots": 0}
 
