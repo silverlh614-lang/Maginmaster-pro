@@ -464,10 +464,10 @@
         <span class="r"><a class="dl" id="csvBtn" href="/api/bybit/trades.csv" download>⬇ CSV</a></span></div>
       <div class="pbody">
         <div class="scroll"><table>
-          <thead><tr><th class="l">시각(UTC)</th><th class="l">심볼</th><th class="l">이벤트</th><th class="l">방향</th>
+          <thead><tr><th class="l">시각(UTC)</th><th class="l">심볼</th><th class="l">전략</th><th class="l">이벤트</th><th class="l">방향</th>
             <th>진입</th><th>청산</th><th>수량</th><th>레버</th><th>결과</th><th>PnL$</th><th>R</th>
             <th class="l">사유</th></tr></thead>
-          <tbody id="jbody"><tr><td class="l muted" colspan="12">로딩 중…</td></tr></tbody>
+          <tbody id="jbody"><tr><td class="l muted" colspan="13">로딩 중…</td></tr></tbody>
         </table></div>
       </div>
     </section>
@@ -742,6 +742,12 @@ async function refresh(){
   $("modeBadge").textContent=run?"LIVE-PAPER":"OFFLINE";
   $("botLabel").textContent=run?("가동 중 · "+s.strategy):"정지됨";
   $("botNote").textContent=s.note||""; $("fStrat").textContent=s.strategy||"–";
+  // 가동 중에는 드롭다운을 실제 실행 전략과 동기화 — STOP→START 시
+  // 기본값(trend_breakout)으로 오전환되는 사고 방지 (편집 중이면 미개입)
+  const _sel=$("stratSel");
+  if(run&&s.strategy&&_sel.value!==s.strategy&&document.activeElement!==_sel){
+    if([..._sel.options].some(o=>o.value===s.strategy))_sel.value=s.strategy;
+  }
   $("btnStart").disabled=run;$("btnStop").disabled=!run;
   const kill=s.risk&&s.risk.kill_switch;$("btnKill").style.display=kill?"inline-block":"none";
   if(kill)$("botNote").textContent="⛔ KILL: "+s.risk.kill_reason;
@@ -907,6 +913,7 @@ async function loadJournal(){let d;try{d=await api("/api/bybit/trades?limit=120"
     const pnl=r.pnl_usd===""?"":money(Number(r.pnl_usd));
     return `<tr><td class="l muted">${(r.ts||"").slice(5,19).replace("T"," ")}</td>
       <td class="l">${esc(r.symbol||"")}</td>
+      <td class="l muted">${esc(r.strategy||"–")}</td>
       <td class="l">${esc(r.event||"")}</td>
       <td class="l">${side?`<span class="tag ${scls}">${side}</span>`:""}</td>
       <td>${fmt(r.entry_price,2)}</td><td>${r.exit_price?fmt(r.exit_price,2):"–"}</td>
@@ -915,7 +922,7 @@ async function loadJournal(){let d;try{d=await api("/api/bybit/trades?limit=120"
       <td class="${Number(r.pnl_usd)>=0?'up':'dn'}">${pnl||"–"}</td>
       <td>${r.r_multiple!==""&&r.r_multiple!=null?fmt(r.r_multiple,2):"–"}</td>
       <td class="l muted" title="${esc(r.reason||"")}">${esc((r.signal_detail||r.reason||"").slice(0,60))}</td></tr>`;
-  }).join(""):'<tr><td class="l muted" colspan="12">거래 없음</td></tr>';
+  }).join(""):'<tr><td class="l muted" colspan="13">거래 없음</td></tr>';
 }
 
 function flashResult(r){const f=$("flash");const win=r.result==="WIN"||Number(r.pnl_usd)>0;
