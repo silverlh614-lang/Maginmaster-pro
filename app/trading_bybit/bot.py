@@ -313,12 +313,33 @@ class BybitManager:
             return {"error": f"symbol '{symbol}' not enabled"}
         return bot.candles(tf, limit)
 
+    def _account_view(self) -> dict:
+        """한 계좌 관점의 스냅샷 — 전 심볼 열린 포지션의 미실현 합계와 전체
+        실현 집계. 대시보드 ACCOUNT 패널은 탭과 무관하게 이것만 본다."""
+        unreal = 0.0
+        open_any = False
+        for b in self.bots.values():
+            pm = b.pm
+            if pm and pm.pos and pm.pos.state.value == "OPEN":
+                px = b.collector.last_price()
+                if px is not None:
+                    unreal += pm.pos.unrealized_usd(px)
+                    open_any = True
+        eq = round(self.ledger.equity, 4)
+        return {
+            "equity_usd": eq,
+            "start_equity_usd": self.cfg.equity_usd,
+            "unrealized_usd": round(unreal, 4) if open_any else None,
+            "mark_value_usd": round(eq + unreal, 4),
+            "aggregate": self.journal.aggregate(),
+        }
+
     def status(self) -> dict:
         return {
             "running": self.running,
             "mode": self.mode,
             "strategy": self.strategy_name,
-            "account": {"equity_usd": round(self.ledger.equity, 4)},
+            "account": self._account_view(),
             "note": ("running: " + ",".join(self.bots)) if self.running else "stopped",
             "risk": self.risk.status(),
             "symbols": {k: b.status() for k, b in self.bots.items()},
