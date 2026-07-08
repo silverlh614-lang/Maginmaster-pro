@@ -230,10 +230,13 @@ class PositionManager:
         if self.cfg.breakeven_after_tp:
             p.trail_price = self._round_price(p.avg_entry)
         self.note = f"PARTIAL {qty:g} @ {price:g} (+{p.r_multiple()}R)"
-        # informational row (result blank) — the FULL position PnL is booked
-        # once at CLOSE, so aggregates never double-count the partial leg.
+        # result stays blank so aggregates (settled rows only) never
+        # double-count this leg — the FULL position PnL is booked at CLOSE.
+        # pnl/r ARE recorded: this row's own realized cash for the journal.
+        leg_r = (round((pnl - fee) / p.initial_risk_usd, 3)
+                 if p.initial_risk_usd > 0 else None)
         self._journal("PARTIAL", None, None, "", round(pnl - fee, 4), fee,
-                      exit_price=price, qty=qty)
+                      exit_price=price, qty=qty, r=leg_r)
 
     def _close(self, price: float, reason: str, ts: float) -> None:
         p = self.pos
@@ -283,7 +286,9 @@ class PositionManager:
             "exit_price": round(exit_price, 6) if exit_price else "",
             "qty": q, "leverage": lev, "notional_usd": notional,
             "risk_usd": round(p.initial_risk_usd, 4) if p else "",
-            "result": result, "pnl_usd": pnl if result else "",
+            "result": result,
+            # PARTIAL 행도 실현 현금을 기록한다 (result 는 비워 집계 중복 방지)
+            "pnl_usd": pnl if (result or event == "PARTIAL") else "",
             "r_multiple": r if r is not None else "",
             "fee_usd": fee, "reason": self.note,
         })
