@@ -146,7 +146,9 @@ def backtest(req: BacktestRequest):
             "metrics": compute(r["closes"], cfg.equity_usd, r.get("final_equity", cfg.equity_usd)),
             "final_equity": r.get("final_equity"),
             "snapshots": r["snapshots"], "trades": len(r["closes"]),
-            "equity_curve": r["equity_curve"][-500:]}
+            "equity_curve": r["equity_curve"][-500:],
+            # 저널 CSV 와 동일 컬럼의 이벤트 행 — UI 의 결과 CSV 내보내기용
+            "trade_rows": r["trades"][:2000]}
 
 
 @router.get("/config")

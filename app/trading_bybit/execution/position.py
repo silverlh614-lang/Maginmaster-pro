@@ -9,6 +9,7 @@ intrabar (high/low) and assumes the stop fills first when a bar spans both
 """
 from __future__ import annotations
 
+import datetime as _dt
 import time
 
 from ..account import AccountLedger
@@ -131,7 +132,7 @@ class PositionManager:
         self.equity -= fee
         self.bars_in_trade = 0
         self.note = f"OPEN {sig.side.value} @ {entry:g} stop {stop:g}"
-        self._journal("OPEN", sig, unit, "", 0.0, fee)
+        self._journal("OPEN", sig, unit, "", 0.0, fee, ts=ts)
         return True
 
     def try_add(self, sig: TradeSignal, price: float, atr_val: float,
@@ -168,7 +169,7 @@ class PositionManager:
         p.realized_fee_usd += fee
         self.equity -= fee
         self.note = f"ADD #{p.adds} {sig.side.value} @ {entry:g}"
-        self._journal("ADD", sig, unit, "", 0.0, fee)
+        self._journal("ADD", sig, unit, "", 0.0, fee, ts=ts)
         return True
 
     # ------------------------------------------------------------- manage
@@ -236,7 +237,7 @@ class PositionManager:
         leg_r = (round((pnl - fee) / p.initial_risk_usd, 3)
                  if p.initial_risk_usd > 0 else None)
         self._journal("PARTIAL", None, None, "", round(pnl - fee, 4), fee,
-                      exit_price=price, qty=qty, r=leg_r)
+                      exit_price=price, qty=qty, r=leg_r, ts=ts)
 
     def _close(self, price: float, reason: str, ts: float) -> None:
         p = self.pos
@@ -257,7 +258,7 @@ class PositionManager:
         self.note = f"CLOSE @ {price:g} pnl {total:+.2f} ({p.r_multiple()}R) {reason}"
         self._journal("CLOSE", None, None, result, total,
                       round(p.realized_fee_usd, 4), exit_price=price,
-                      qty=qty, r=p.r_multiple())
+                      qty=qty, r=p.r_multiple(), ts=ts)
         # keep the closed position visible for one status cycle, then flatten
         self.pos = p
 
@@ -270,13 +271,20 @@ class PositionManager:
 
     def _journal(self, event: str, sig: TradeSignal | None, unit: Unit | None,
                  result: str, pnl: float, fee: float, exit_price=None,
-                 qty=None, r=None) -> None:
+                 qty=None, r=None, ts: float | None = None) -> None:
         p = self.pos
+        # 이벤트 시각 = 봉 시각(ts). 없으면 빈칸 — 라이브 Journal 이 기록
+        # 시각으로 채우고, 백테스트 CSV 는 봉 시각이 그대로 남는다.
+        ts_iso = ""
+        if ts:
+            ts_iso = _dt.datetime.fromtimestamp(
+                ts, tz=_dt.timezone.utc).isoformat(timespec="seconds")
         entry = unit.entry_price if unit else (p.avg_entry if p else "")
         q = unit.qty if unit else (qty if qty is not None else "")
         notional = round((entry or 0) * (q or 0), 4) if entry and q else ""
         lev = round(notional / self.equity, 2) if notional and self.equity else ""
         self.journal.append({
+            "ts": ts_iso,
             "symbol": self.spec.key, "mode": self.mode,
             "strategy": self.strategy_name,
             "event": event, "side": (sig.side.value if sig else (p.side.value if p else "")),
