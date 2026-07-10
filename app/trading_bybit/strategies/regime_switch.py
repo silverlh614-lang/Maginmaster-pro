@@ -7,6 +7,12 @@ regime, then the bar's decision is delegated to the matching sub-strategy:
   ADX <= adx_range_max → 횡보장 → regime_range_strategy (기본 range_box)
   그 사이 (dead zone)  → 판단 유보 — 신규 진입 없음 (레짐 전환 whipsaw 방지)
 
+A regime is only ADOPTED once it holds for regime_confirm_bars consecutive
+HTF closes (임계값 1봉 스침으로 인한 경계 whipsaw 가드) — checked statelessly
+by re-reading ADX on truncated histories, so live/backtest/restart agree.
+Per-bar regime counts and confirmed-regime flips are kept as telemetry()
+for the Phase 2 gate's stratified sample-size report.
+
 Sub-strategies are reused untouched — this class only routes the same
 BybitContext to one of them per bar, so the strategy/execution split holds
 and each sub-strategy stays independently backtestable. Thresholds are
@@ -44,10 +50,15 @@ class RegimeSwitchStrategy(BybitStrategy):
         _make = lambda n: _SUBS[n](config) if _SUBS[n] is not None else None
         self.trend_sub = _make(config.regime_trend_strategy)
         self.range_sub = _make(config.regime_range_strategy)
+        # 텔레메트리 (판단에 불사용): bar별 레짐 분포 + 확정 레짐 플립 수.
+        # Phase 2 게이트가 "어느 팔이 표본 부족인가"를 정량화하는 데 쓴다.
+        self._counts: dict[str, int] = {}
+        self._flips = 0
+        self._last_confirmed: str | None = None
 
-    def _regime(self, ctx: BybitContext) -> tuple[str | None, float | None]:
-        """('trend'|'range'|'neutral'|None, adx). None = ADX 워밍업 부족."""
-        v = adx(ctx.htf_candles, self.cfg.adx_period)
+    def _regime_raw(self, htf) -> tuple[str | None, float | None]:
+        """임계값만 본 순간 판정 ('trend'|'range'|'neutral'|None, adx)."""
+        v = adx(htf, self.cfg.adx_period)
         if v is None:
             return None, None
         if v >= self.cfg.adx_trend_min:
@@ -55,6 +66,36 @@ class RegimeSwitchStrategy(BybitStrategy):
         if v <= self.cfg.adx_range_max:
             return "range", v
         return "neutral", v
+
+    def _regime(self, ctx: BybitContext
+                ) -> tuple[str | None, float | None, str | None]:
+        """('trend'|'range'|'neutral'|None, adx, pending).
+
+        None = ADX 워밍업 부족. 레짐은 최근 regime_confirm_bars 연속 HTF
+        봉에서 같은 판정이 유지될 때만 채택 — 미확정이면 'neutral'(관망)로
+        내리고 pending에 대기 중인 레짐을 담는다 (경계 whipsaw 가드).
+        무상태: 잘린 히스토리로 재판정하므로 재시작·백테스트와 동일."""
+        raw, v = self._regime_raw(ctx.htf_candles)
+        n = max(1, int(self.cfg.regime_confirm_bars))
+        if raw in (None, "neutral") or n == 1:
+            return raw, v, None
+        for k in range(1, n):
+            prev, _ = self._regime_raw(ctx.htf_candles[:-k])
+            if prev != raw:
+                return "neutral", v, raw
+        return raw, v, None
+
+    def _record(self, regime: str | None, pending: str | None) -> None:
+        key = "confirming" if pending else (regime or "warmup")
+        self._counts[key] = self._counts.get(key, 0) + 1
+        if regime in ("trend", "range") and regime != self._last_confirmed:
+            if self._last_confirmed is not None:
+                self._flips += 1
+            self._last_confirmed = regime
+
+    def telemetry(self) -> dict:
+        """평가 bar별 레짐 분포와 확정 레짐 플립 수 (백테스트 리포트용)."""
+        return {"bars": dict(self._counts), "regime_flips": self._flips}
 
     def _sub(self, regime: str | None) -> BybitStrategy | None:
         if regime == "trend":
@@ -64,7 +105,8 @@ class RegimeSwitchStrategy(BybitStrategy):
         return None
 
     def evaluate(self, ctx: BybitContext) -> TradeSignal | None:
-        regime, v = self._regime(ctx)
+        regime, v, pending = self._regime(ctx)
+        self._record(regime, pending)
         sub = self._sub(regime)
         if sub is None:
             return None
@@ -74,13 +116,16 @@ class RegimeSwitchStrategy(BybitStrategy):
         return sig
 
     def diagnose(self, ctx: BybitContext) -> dict | None:
-        regime, v = self._regime(ctx)
+        regime, v, pending = self._regime(ctx)
         c = self.cfg
         t_name = self.trend_sub.name if self.trend_sub else "관망(none)"
         r_name = self.range_sub.name if self.range_sub else "관망(none)"
+        neutral = (f"관망 — {pending} 전환 확인 중 "
+                   f"(연속 {max(1, int(c.regime_confirm_bars))}봉 확정 대기)"
+                   if pending else "관망 (dead zone)")
         label = {"trend": f"추세장 → {t_name}",
                  "range": f"횡보장 → {r_name}",
-                 "neutral": "관망 (dead zone)"}.get(regime, "ADX 워밍업")
+                 "neutral": neutral}.get(regime, "ADX 워밍업")
         regime_gate = {
             "key": "regime", "label": "레짐 판별(HTF ADX)",
             "ok": regime in ("trend", "range"),

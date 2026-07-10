@@ -148,10 +148,12 @@ def test_regime_switch_routing():
 
     # 추세장: reuse the trend-breakout scenario; its HTF has only 25 bars so
     # shrink adx_period, and anchor thresholds to the measured ADX (test-only
-    # routing check — live thresholds stay backtest-calibrated).
+    # routing check — live thresholds stay backtest-calibrated). confirm=1:
+    # 이 테스트는 라우팅만 본다 — 확정 가드는 test_regime_confirm_bars 소관.
     htf, entry = _uptrend_breakout()
     cfg2 = BybitConfig()
     cfg2.adx_period = 10
+    cfg2.regime_confirm_bars = 1
     v = ind.adx(htf, cfg2.adx_period)
     cfg2.adx_trend_min = v * 0.9
     cfg2.adx_range_max = v * 0.5
@@ -194,6 +196,64 @@ def test_regime_none_option():
     print("ok  regime none option (횡보장 관망 — no entries)")
 
 
+def test_regime_confirm_bars():
+    """레짐 확정 가드 — 임계값을 1봉만 스친 레짐은 채택하지 않는다.
+    픽스처: _uptrend_breakout HTF의 ADX(10)는 최신 봉 10.0, 직전 봉 0.0 —
+    즉 '이번 봉에 갓 나타난 추세장'. 앵커 임계값은 테스트 전용."""
+    htf, entry = _uptrend_breakout()
+    base = dict(adx_period=10, adx_trend_min=5.0, adx_range_max=-1.0)
+
+    # confirm=2: 추세가 최신 1봉뿐 → 관망 (pending), 시그널 없음
+    cfg = BybitConfig()
+    for k, val in {**base, "regime_confirm_bars": 2}.items():
+        setattr(cfg, k, val)
+    strat = make_strategy("regime_switch", cfg)
+    assert strat.evaluate(_ctx(htf, entry)) is None
+    d = strat.diagnose(_ctx(htf, entry))
+    assert d and d["regime"] == "neutral" and not d["gates"][0]["ok"], d
+    assert "확인 중" in d["gates"][0]["info"], d["gates"][0]
+    tel = strat.telemetry()
+    assert tel["bars"].get("confirming") == 1 and tel["regime_flips"] == 0, tel
+
+    # confirm=1 (즉시 채택): 동일 컨텍스트에서 시그널이 나와야 한다 (대조군)
+    cfg1 = BybitConfig()
+    for k, val in {**base, "regime_confirm_bars": 1}.items():
+        setattr(cfg1, k, val)
+    strat1 = make_strategy("regime_switch", cfg1)
+    sig = strat1.evaluate(_ctx(htf, entry))
+    assert sig is not None and sig.signal_type == "TREND_BREAKOUT", sig
+
+    # 추세 HTF 봉이 하나 더 쌓여 2연속 확정 → confirm=2도 채택·시그널 방출
+    htf2 = htf + [_c(25 * 3600000, 130, 152, 129, 150, 500)]
+    sig2 = strat.evaluate(_ctx(htf2, entry))
+    assert sig2 is not None and sig2.detail.startswith("[trend ADX"), sig2
+    tel2 = strat.telemetry()
+    assert tel2["bars"].get("trend") == 1, tel2
+    print("ok  regime confirm bars (1봉 스침 관망 → 2연속 확정 채택 + 텔레메트리)")
+
+
+def test_stratify_by_regime():
+    from app.trading_bybit.backtest.metrics import stratify_by_regime
+    trades = [
+        {"symbol": "BTC", "event": "OPEN",
+         "signal_detail": "[range ADX 12.0 → range_box] 횡보"},
+        {"symbol": "BTC", "event": "CLOSE", "pnl_usd": 4.0, "r_multiple": 2.0},
+        {"symbol": "BTC", "event": "OPEN",
+         "signal_detail": "[trend ADX 30.0 → trend_breakout] 추세"},
+        {"symbol": "BTC", "event": "PARTIAL", "pnl_usd": 1.0, "r_multiple": 0.5},
+        {"symbol": "BTC", "event": "CLOSE", "pnl_usd": -2.0, "r_multiple": -1.0},
+        {"symbol": "ETH", "event": "OPEN", "signal_detail": "no prefix"},
+        {"symbol": "ETH", "event": "CLOSE", "pnl_usd": 1.0, "r_multiple": 0.5},
+    ]
+    s = stratify_by_regime(trades)
+    assert set(s) == {"range", "trend", "unrouted"}, s
+    assert s["range"]["trades"] == 1 and s["range"]["wins"] == 1, s["range"]
+    assert s["trend"]["trades"] == 1 and s["trend"]["losses"] == 1, s["trend"]
+    assert s["trend"]["pnl_usd"] == -2.0, s["trend"]      # PARTIAL 행 미중복
+    assert s["unrouted"]["trades"] == 1, s["unrouted"]
+    print("ok  stratify by regime (팔별 분리 + unrouted + PARTIAL 비중복)")
+
+
 # ------------------------------------------------------------- integration
 
 def test_registry_and_backtest_replay():
@@ -204,7 +264,10 @@ def test_registry_and_backtest_replay():
     for name in ("trendline", "range_box", "regime_switch"):
         r = replay("BTC", name, cfg, entry_candles=entry, htf_candles=htf)
         assert r["snapshots"] > 0, (name, r)
-    print("ok  registry + backtest replay smoke (3 new strategies)")
+        if name == "regime_switch":
+            tel = r.get("regime_telemetry")
+            assert tel and sum(tel["bars"].values()) == r["snapshots"], tel
+    print("ok  registry + backtest replay smoke (3 new strategies + telemetry)")
 
 
 if __name__ == "__main__":
@@ -214,5 +277,7 @@ if __name__ == "__main__":
     test_range_box_long_short()
     test_regime_switch_routing()
     test_regime_none_option()
+    test_regime_confirm_bars()
+    test_stratify_by_regime()
     test_registry_and_backtest_replay()
     print("\nall strategy tests passed ✅")

@@ -173,6 +173,12 @@ def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
         pm._close(entry_candles[-1].close, "backtest end", ctx.now)
 
     closes = [r for r in journal.rows if r["event"] == "CLOSE"]
-    return {"trades": journal.rows, "closes": closes,
-            "equity_curve": equity_curve, "snapshots": snapshots,
-            "final_equity": round(pm.equity, 4)}
+    out = {"trades": journal.rows, "closes": closes,
+           "equity_curve": equity_curve, "snapshots": snapshots,
+           "final_equity": round(pm.equity, 4)}
+    # 전략이 텔레메트리를 노출하면 (regime_switch: 레짐 분포·플립) 동봉 —
+    # 층화 리포트가 "어느 팔이 표본 부족인가"를 판단하는 근거.
+    tel = getattr(strategy, "telemetry", None)
+    if callable(tel):
+        out["regime_telemetry"] = tel()
+    return out
