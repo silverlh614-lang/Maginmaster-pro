@@ -157,3 +157,29 @@ def config():
             "symbols": list(MANAGER.bots),
             "strategies": list(STRATEGIES),
             "phase": "1 (paper only)"}
+
+
+@router.get("/live/status")
+def live_status():
+    """Phase 3 준비 상태 점검 — 키 존재 여부(불리언만)·거래소 도달성·지갑
+    조회(읽기 전용). 주문 경로는 게이트 잠금 상태임을 항상 명시한다."""
+    from .bybit_client import BybitClient
+    c = BybitClient(CONFIG)
+    out = {
+        "testnet": CONFIG.testnet,
+        "live_enabled": CONFIG.live_enabled,
+        "keys_configured": c.keys_configured,
+        "base_url": c.base,
+        "order_path": "LOCKED — 백테스트 게이트 통과 후 Phase 3 에서 해제",
+    }
+    try:
+        out["exchange_reachable"] = c.server_time() is not None
+    except Exception as e:
+        out["exchange_reachable"] = False
+        out["reach_error"] = type(e).__name__
+    if c.keys_configured:
+        try:
+            out["wallet"] = c.wallet_balance()
+        except Exception as e:
+            out["wallet_error"] = type(e).__name__
+    return out
