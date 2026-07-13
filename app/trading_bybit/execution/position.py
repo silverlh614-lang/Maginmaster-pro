@@ -9,8 +9,10 @@ intrabar (high/low) and assumes the stop fills first when a bar spans both
 """
 from __future__ import annotations
 
+import datetime as _dt
 import time
 
+from ..account import AccountLedger
 from ..config import BybitConfig, SymbolSpec
 from ..models import Candle, Position, PositionState, Side, TradeSignal, Unit
 from ..risk import BybitRiskManager, size_position
@@ -19,32 +21,48 @@ from ..store import Journal
 
 class PositionManager:
     def __init__(self, spec: SymbolSpec, cfg: BybitConfig, risk: BybitRiskManager,
-                 journal: Journal, mode: str = "paper", strategy_name: str = ""):
+                 journal: Journal, mode: str = "paper", strategy_name: str = "",
+                 ledger: AccountLedger | None = None):
         self.spec = spec
         self.cfg = cfg
         self.risk = risk
         self.journal = journal
         self.mode = mode
         self.strategy_name = strategy_name
-        self.equity = cfg.equity_usd
+        # 자산은 전 심볼 공유 원장(한 계좌) 소유 — 미지정 시(백테스트·단위
+        # 테스트) 이 심볼만의 비영속 로컬 원장으로 폴백.
+        self._ledger = ledger if ledger is not None else AccountLedger(cfg)
         self.pos: Position | None = None
         self.bars_in_trade = 0
         self.note = "flat"
+        # 리스크 캡은 전 심볼 합산이 원칙 — 관문에 이 심볼의 장부를 등록한다.
+        # (백테스트의 permissive shim 처럼 등록 개념이 없는 관문이면 생략)
+        if hasattr(risk, "register_book"):
+            risk.register_book(spec.key, self)
+
+    @property
+    def equity(self) -> float:
+        return self._ledger.equity
+
+    @equity.setter
+    def equity(self, value: float) -> None:
+        self._ledger.set(value)
 
     # ------------------------------------------------------- persistence
 
     def to_state(self) -> dict:
-        """Full snapshot for restart survival (equity + live position)."""
-        return {"equity": round(self.equity, 8),
-                "bars_in_trade": self.bars_in_trade,
+        """Snapshot for restart survival. The live position only — equity is
+        the account ledger's job (AccountStore), not per-symbol state."""
+        return {"bars_in_trade": self.bars_in_trade,
                 "note": self.note,
                 "position": _pos_to_dict(self.pos) if self.pos else None}
 
     def load_state(self, st: dict | None) -> None:
-        """Restore a snapshot saved by to_state(). Absent/empty -> fresh start."""
+        """Restore a snapshot saved by to_state(). Absent/empty -> fresh start.
+        A legacy `equity` field in old records is ignored here — the account
+        ledger inherits it once at BybitManager construction (migration)."""
         if not st:
             return
-        self.equity = float(st.get("equity", self.equity))
         self.bars_in_trade = int(st.get("bars_in_trade", 0))
         self.note = st.get("note", self.note)
         p = st.get("position")
@@ -63,6 +81,13 @@ class PositionManager:
         if not p or p.state != PositionState.OPEN or p.stop_price is None:
             return 0.0
         return p.open_qty * abs(p.avg_entry - p.stop_price)
+
+    def _exposure(self) -> tuple[int, float]:
+        """Exposure fed to the risk gate: GLOBAL across symbols when the gate
+        keeps a book registry, own-symbol only otherwise (backtest shim)."""
+        if hasattr(self.risk, "global_exposure"):
+            return self.risk.global_exposure()
+        return self.open_positions, self.open_risk_usd
 
     def _fee(self, notional: float) -> float:
         return round(abs(notional) * self.cfg.taker_fee_frac, 6)
@@ -87,7 +112,8 @@ class PositionManager:
         if qty <= 0:
             self.note = f"size skip: {why}"
             return False
-        ok, gate = self.risk.allow_entry(self.open_positions, self.open_risk_usd,
+        open_n, open_risk = self._exposure()
+        ok, gate = self.risk.allow_entry(open_n, open_risk,
                                          risk_usd, is_add=False,
                                          equity_usd=self.equity)
         if not ok:
@@ -99,14 +125,15 @@ class PositionManager:
         fee = self._fee(entry * qty)
         unit = Unit(side=sig.side, entry_price=entry, qty=qty, stop_price=stop,
                     entry_ts=ts, fee_usd=fee)
-        self.pos = Position(symbol=self.spec.key, side=sig.side, units=[unit],
+        self.pos = Position(symbol=self.spec.key, side=sig.side,
+                            strategy=self.strategy_name, units=[unit],
                             initial_risk_usd=risk_usd,
                             target_price=self._round_price(target))
         self.pos.realized_fee_usd = fee
         self.equity -= fee
         self.bars_in_trade = 0
         self.note = f"OPEN {sig.side.value} @ {entry:g} stop {stop:g}"
-        self._journal("OPEN", sig, unit, "", 0.0, fee)
+        self._journal("OPEN", sig, unit, "", 0.0, fee, ts=ts)
         return True
 
     def try_add(self, sig: TradeSignal, price: float, atr_val: float,
@@ -129,7 +156,8 @@ class PositionManager:
             self.spec, self.cfg.leverage_max)
         if qty <= 0:
             return False
-        ok, gate = self.risk.allow_entry(self.open_positions, self.open_risk_usd,
+        open_n, open_risk = self._exposure()
+        ok, gate = self.risk.allow_entry(open_n, open_risk,
                                          risk_usd, is_add=True,
                                          equity_usd=self.equity)
         if not ok:
@@ -142,7 +170,7 @@ class PositionManager:
         p.realized_fee_usd += fee
         self.equity -= fee
         self.note = f"ADD #{p.adds} {sig.side.value} @ {entry:g}"
-        self._journal("ADD", sig, unit, "", 0.0, fee)
+        self._journal("ADD", sig, unit, "", 0.0, fee, ts=ts)
         return True
 
     # ------------------------------------------------------------- manage
@@ -204,10 +232,13 @@ class PositionManager:
         if self.cfg.breakeven_after_tp:
             p.trail_price = self._round_price(p.avg_entry)
         self.note = f"PARTIAL {qty:g} @ {price:g} (+{p.r_multiple()}R)"
-        # informational row (result blank) — the FULL position PnL is booked
-        # once at CLOSE, so aggregates never double-count the partial leg.
+        # result stays blank so aggregates (settled rows only) never
+        # double-count this leg — the FULL position PnL is booked at CLOSE.
+        # pnl/r ARE recorded: this row's own realized cash for the journal.
+        leg_r = (round((pnl - fee) / p.initial_risk_usd, 3)
+                 if p.initial_risk_usd > 0 else None)
         self._journal("PARTIAL", None, None, "", round(pnl - fee, 4), fee,
-                      exit_price=price, qty=qty)
+                      exit_price=price, qty=qty, r=leg_r, ts=ts)
 
     def _close(self, price: float, reason: str, ts: float) -> None:
         p = self.pos
@@ -228,7 +259,7 @@ class PositionManager:
         self.note = f"CLOSE @ {price:g} pnl {total:+.2f} ({p.r_multiple()}R) {reason}"
         self._journal("CLOSE", None, None, result, total,
                       round(p.realized_fee_usd, 4), exit_price=price,
-                      qty=qty, r=p.r_multiple())
+                      qty=qty, r=p.r_multiple(), ts=ts)
         # keep the closed position visible for one status cycle, then flatten
         self.pos = p
 
@@ -241,15 +272,24 @@ class PositionManager:
 
     def _journal(self, event: str, sig: TradeSignal | None, unit: Unit | None,
                  result: str, pnl: float, fee: float, exit_price=None,
-                 qty=None, r=None) -> None:
+                 qty=None, r=None, ts: float | None = None) -> None:
         p = self.pos
+        # 이벤트 시각 = 봉 시각(ts). 없으면 빈칸 — 라이브 Journal 이 기록
+        # 시각으로 채우고, 백테스트 CSV 는 봉 시각이 그대로 남는다.
+        ts_iso = ""
+        if ts:
+            ts_iso = _dt.datetime.fromtimestamp(
+                ts, tz=_dt.timezone.utc).isoformat(timespec="seconds")
         entry = unit.entry_price if unit else (p.avg_entry if p else "")
         q = unit.qty if unit else (qty if qty is not None else "")
         notional = round((entry or 0) * (q or 0), 4) if entry and q else ""
         lev = round(notional / self.equity, 2) if notional and self.equity else ""
         self.journal.append({
+            "ts": ts_iso,
             "symbol": self.spec.key, "mode": self.mode,
-            "strategy": self.strategy_name,
+            # 귀속은 포지션을 연 전략 기준 — 재시작·전략 변경 후 정산돼도
+            # OPEN 시점의 전략으로 기록된다 (없으면 현재 전략 폴백)
+            "strategy": (p.strategy if p and p.strategy else self.strategy_name),
             "event": event, "side": (sig.side.value if sig else (p.side.value if p else "")),
             "signal_type": sig.signal_type if sig else "",
             "signal_detail": sig.detail if sig else "",
@@ -257,7 +297,9 @@ class PositionManager:
             "exit_price": round(exit_price, 6) if exit_price else "",
             "qty": q, "leverage": lev, "notional_usd": notional,
             "risk_usd": round(p.initial_risk_usd, 4) if p else "",
-            "result": result, "pnl_usd": pnl if result else "",
+            "result": result,
+            # PARTIAL 행도 실현 현금을 기록한다 (result 는 비워 집계 중복 방지)
+            "pnl_usd": pnl if (result or event == "PARTIAL") else "",
             "r_multiple": r if r is not None else "",
             "fee_usd": fee, "reason": self.note,
         })
@@ -293,7 +335,7 @@ def _unit_from_dict(d: dict) -> Unit:
 
 
 def _pos_to_dict(p: Position) -> dict:
-    return {"symbol": p.symbol, "side": p.side.value,
+    return {"symbol": p.symbol, "side": p.side.value, "strategy": p.strategy,
             "units": [_unit_to_dict(u) for u in p.units],
             "initial_risk_usd": p.initial_risk_usd,
             "target_price": p.target_price, "trail_price": p.trail_price,
@@ -306,6 +348,7 @@ def _pos_to_dict(p: Position) -> dict:
 def _pos_from_dict(d: dict) -> Position:
     return Position(
         symbol=d["symbol"], side=Side(d["side"]),
+        strategy=d.get("strategy", ""),
         units=[_unit_from_dict(u) for u in d.get("units", [])],
         initial_risk_usd=d.get("initial_risk_usd", 0.0),
         target_price=d.get("target_price"), trail_price=d.get("trail_price"),

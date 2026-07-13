@@ -55,6 +55,22 @@ class BybitConfig:
     # hypothesis_registry H8 통과 전 라이브 기본값 변경 금지.
     short_vol_exempt: bool = False       # SHORT 한정 거래량 게이트 면제
 
+    # --- 추세선 매매 (strategy "trendline") ---------------------------------
+    # 아래 값들은 Phase 2 백테스트 게이트 캘리브레이션 대상 — hand-tune 금지.
+    pivot_strength: int = 3              # 피벗 확정에 필요한 좌·우 봉 수
+    trendline_touch_atr: float = 0.5     # 추세선 터치 존 폭 (ATR 배수)
+
+    # --- 박스권 매매 (strategy "range_box") ---------------------------------
+    range_lookback: int = 20             # entry TF 박스 산정 봉 수 (현재 봉 제외)
+    range_touch_atr: float = 0.5         # 박스 상·하단 터치 존 폭 (ATR 배수)
+
+    # --- 레짐 스위치 (strategy "regime_switch"): ADX 추세/횡보 판별 ---------
+    adx_period: int = 14
+    adx_trend_min: float = 25.0          # HTF ADX ≥ 이면 추세장 → trend 전략
+    adx_range_max: float = 20.0          # HTF ADX ≤ 이면 횡보장 → range 전략
+    regime_trend_strategy: str = "trend_breakout"   # 추세장 위임 전략 ("none"=관망)
+    regime_range_strategy: str = "range_box"        # 횡보장 위임 전략 ("none"=관망)
+
     # --- System #2: risk management (ATR sizing) ---------------------------
     atr_period: int = 14
     atr_stop_mult: float = 1.5           # hard stop = k * ATR from entry

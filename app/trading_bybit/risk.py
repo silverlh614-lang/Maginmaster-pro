@@ -57,6 +57,22 @@ class BybitRiskManager:
         self.kill_switch: bool = st.get("kill_switch", False)
         self.kill_reason: str = st.get("kill_reason", "")
         self._errors = 0
+        self._books: dict[str, object] = {}   # symbol key -> PositionManager
+
+    # ---------------------------------------------------- global exposure
+
+    def register_book(self, key: str, book) -> None:
+        """Register a symbol's PositionManager so the caps see EVERY symbol's
+        exposure (GLOBAL across symbols). The same key replaces the previous
+        book — a bot restart never double-counts."""
+        self._books[key] = book
+
+    def global_exposure(self) -> tuple[int, float]:
+        """(open position count, open risk USD) summed across all registered
+        symbols — the input allow_entry's concurrent/open-risk caps expect."""
+        n = sum(b.open_positions for b in self._books.values())
+        risk = sum(b.open_risk_usd for b in self._books.values())
+        return n, risk
 
     # ------------------------------------------------------------- checks
 

@@ -2,9 +2,10 @@
 
 Backtest engine. Fetches historical Bybit klines (entry + higher timeframe)
 and replays them bar-by-bar, rebuilding the exact BybitContext the live bot
-would have seen and driving the SAME PositionManager FSM. Risk daily caps are
-intentionally OFF (permissive gate) — the goal is raw strategy statistics,
-the Phase 2 gate that must pass before any live capital. Settlement is the
+would have seen and driving the SAME PositionManager FSM. Structural sizing
+caps (합산 오픈리스크) are ON so pyramiding matches live; operational daily
+caps/kill switch are OFF — raw strategy statistics for the Phase 2 gate that
+must pass before any live capital. Settlement is the
 FSM's own stop/target/trailing against each bar's high/low (no look-ahead).
 """
 from __future__ import annotations
@@ -24,23 +25,46 @@ def _interval_min(interval: str) -> int:
     return table.get(interval, int(interval))
 
 
-def fetch_klines(symbol: str, interval: str, limit: int = 1000) -> list[Candle]:
-    """Public Bybit klines, oldest→newest, forming bar dropped."""
+PAGE_LIMIT = 1000        # Bybit v5 kline hard cap per request
+
+
+def _fetch_page(symbol: str, interval: str, end_ms: int | None) -> list[Candle]:
+    """One public kline page (≤1000 bars), any order. end_ms bounds the page
+    (inclusive); None = newest page."""
     import httpx    # lazy: keeps the module importable in offline tests
     params = {"category": "linear", "symbol": symbol, "interval": interval,
-              "limit": min(limit, 1000)}
+              "limit": PAGE_LIMIT}
+    if end_ms is not None:
+        params["end"] = end_ms
     with httpx.Client(timeout=15, headers={"User-Agent": "coinmaster-pro"}) as c:
         r = c.get(BYBIT_REST, params=params)
         r.raise_for_status()
         data = r.json()
     if data.get("retCode") != 0:
         raise ValueError(f"bybit retCode {data.get('retCode')}: {data.get('retMsg')}")
-    rows = data.get("result", {}).get("list", [])
-    out = [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
-                  low=float(x[3]), close=float(x[4]), volume=float(x[5]))
-           for x in rows]
-    out.sort(key=lambda c: c.ts_ms)
-    return out[:-1] if out else out          # drop the still-forming bar
+    return [Candle(ts_ms=int(x[0]), open=float(x[1]), high=float(x[2]),
+                   low=float(x[3]), close=float(x[4]), volume=float(x[5]))
+            for x in data.get("result", {}).get("list", [])]
+
+
+def fetch_history(symbol: str, interval: str, bars: int,
+                  fetch_page=_fetch_page) -> list[Candle]:
+    """Up to `bars` CLOSED klines, oldest→newest, paginated past the venue's
+    1000-bar page cap by walking backwards (end = oldest_ts - 1). Stops early
+    when the venue has no older history. Phase 2 게이트의 표본 확보 통로."""
+    by_ts: dict[int, Candle] = {}
+    end_ms: int | None = None
+    while len(by_ts) < bars + 1:             # +1: forming newest bar dropped below
+        page = fetch_page(symbol, interval, end_ms)
+        if not page:
+            break
+        for c in page:
+            by_ts[c.ts_ms] = c
+        if len(page) < PAGE_LIMIT:            # venue exhausted — no older bars
+            break
+        end_ms = min(c.ts_ms for c in page) - 1
+    out = sorted(by_ts.values(), key=lambda c: c.ts_ms)
+    return out[:-1][-bars:] if out else out   # drop forming bar, keep newest N
 
 
 class _MemJournal:
@@ -54,8 +78,33 @@ class _MemJournal:
 
 
 class _PermissiveRisk:
-    """Backtest risk shim: no daily caps, no kill switch — raw stats only."""
+    """Fully permissive risk shim (kept for unit-test fixtures)."""
     def allow_entry(self, *a, **k):
+        return True, ""
+
+    def record_ok(self): ...
+    def record_error(self, e): ...
+
+
+class _StructuralRisk:
+    """Backtest risk shim: STRUCTURAL sizing caps ON, operational caps OFF.
+
+    라이브와 동일한 사이징 조건에서 raw stats를 얻기 위해 합산 오픈리스크
+    캡(애드업 스택 차단)은 켠다 — 이것을 끄면 라이브에서 불가능한 -5R짜리
+    피라미딩 손실이 통계에 섞인다. 일일 손실캡·거래수·킬스위치는 게이트
+    목적(전략 자체의 EV 측정)에 맞게 계속 끈 상태를 유지한다."""
+
+    def __init__(self, cfg: BybitConfig):
+        self.cfg = cfg
+
+    def allow_entry(self, open_positions: int, open_risk_usd: float,
+                    new_risk_usd: float, is_add: bool = False,
+                    equity_usd: float | None = None):
+        equity = equity_usd if equity_usd and equity_usd > 0 else self.cfg.equity_usd
+        cap = equity * self.cfg.max_total_open_risk_pct / 100.0
+        if open_risk_usd + new_risk_usd > cap + 1e-9:
+            return False, (f"total_open_risk would be "
+                           f"${open_risk_usd + new_risk_usd:.2f} > cap ${cap:.2f}")
         return True, ""
 
     def record_ok(self): ...
@@ -64,25 +113,30 @@ class _PermissiveRisk:
 
 def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
            entry_candles: list[Candle] | None = None,
-           htf_candles: list[Candle] | None = None) -> dict:
-    """Replay one symbol. Candles can be injected (offline tests) or fetched.
-    Returns {trades, closes, equity_curve, snapshots}."""
+           htf_candles: list[Candle] | None = None,
+           bars: int = 1000) -> dict:
+    """Replay one symbol. Candles can be injected (offline tests) or fetched
+    (paginated, `bars` entry-TF bars). Returns {trades, closes, equity_curve,
+    snapshots}."""
     spec: SymbolSpec = SYMBOL_SPECS[symbol.upper()]
     if entry_candles is None:
-        entry_candles = fetch_klines(spec.symbol, cfg.entry_interval)
+        entry_candles = fetch_history(spec.symbol, cfg.entry_interval, bars)
     if htf_candles is None:
-        htf_candles = fetch_klines(spec.symbol, cfg.htf_interval)
+        # HTF must cover the same span plus indicator warmup (ADX 등)
+        span = _interval_min(cfg.entry_interval) * bars
+        htf_bars = span // _interval_min(cfg.htf_interval) + 2 * (2 * cfg.adx_period + 1)
+        htf_candles = fetch_history(spec.symbol, cfg.htf_interval, htf_bars)
     if not entry_candles or not htf_candles:
         return {"trades": [], "closes": [], "equity_curve": [], "snapshots": 0}
 
     strategy = make_strategy(strategy_name, cfg)
-    pm = PositionManager(spec, cfg, _PermissiveRisk(), _MemJournal(), "backtest",
-                         strategy_name)
+    pm = PositionManager(spec, cfg, _StructuralRisk(cfg), _MemJournal(),
+                         "backtest", strategy_name)
     journal: _MemJournal = pm.journal   # type: ignore[assignment]
     entry_min = _interval_min(cfg.entry_interval)
     htf_min = _interval_min(cfg.htf_interval)
     warmup = max(cfg.box_lookback, cfg.atr_period, cfg.vol_ma_period,
-                 cfg.ema_period) + 2
+                 cfg.ema_period, cfg.range_lookback, 2 * cfg.adx_period + 1) + 2
 
     equity_curve: list[float] = []
     snapshots = 0

@@ -154,7 +154,11 @@ def test_fsm_partial_then_trail():
     # journal: exactly one settled CLOSE row (no double counting the partial)
     agg = pm.journal.aggregate()
     assert agg["trades"] == 1 and agg["settled"] == 1, agg
-    print("ok  fsm partial + trailing + single settled row")
+    # PARTIAL row records its own realized cash + leg R (result stays blank)
+    prow = next(r for r in pm.journal.tail(10) if r["event"] == "PARTIAL")
+    assert prow["result"] == "" and float(prow["pnl_usd"]) > 0, prow
+    assert float(prow["r_multiple"]) > 0, prow
+    print("ok  fsm partial + trailing + single settled row + partial pnl logged")
 
 
 def test_fsm_pyramiding():
@@ -419,8 +423,9 @@ def test_kline_cross_validation():
 
 
 def test_state_persistence():
-    """Equity + a live open position must round-trip through PositionStore so a
-    trade in progress and the 복리 equity survive a restart/redeploy."""
+    """A live open position must round-trip through PositionStore so a trade
+    in progress survives a restart/redeploy. (Equity round-trips through the
+    unified AccountLedger/AccountStore — tests/test_account_ledger.py.)"""
     from app.trading_bybit.config import BybitConfig, SYMBOL_SPECS
     from app.trading_bybit.execution.position import PositionManager
     from app.trading_bybit.models import Position, PositionState, Side, Unit
@@ -432,24 +437,23 @@ def test_state_persistence():
     j = Journal()
     risk = BybitRiskManager(cfg, j, BotState())
     pm = PositionManager(spec, cfg, risk, j, "paper", "trend_breakout")
-    # simulate a compounded equity + a partially-managed open long
+    # simulate a partially-managed open long
     pm.pos = Position(symbol="BTCUSDT", side=Side.LONG,
                       units=[Unit(Side.LONG, 63000.0, 0.01, 62500.0, 1.0,
                                   fee_usd=0.3)],
                       initial_risk_usd=5.0, target_price=64000.0,
                       trail_price=62800.0, realized_pnl_usd=2.1,
                       partial_done=True, state=PositionState.OPEN)
-    pm.equity = 207.4
     pm.bars_in_trade = 9
 
     store = PositionStore()
     store.save("BTC", pm.to_state())
+    assert "equity" not in store.load("BTC")       # equity는 계좌 원장 소관
 
     # a fresh manager (as after a redeploy) restores the exact state
     pm2 = PositionManager(spec, cfg, risk, j, "paper", "trend_breakout")
-    assert pm2.equity == cfg.equity_usd            # default before restore
     pm2.load_state(store.load("BTC"))
-    assert abs(pm2.equity - 207.4) < 1e-9, pm2.equity
+    assert pm2.equity == cfg.equity_usd            # 심볼 기록은 equity 미보유
     assert pm2.bars_in_trade == 9
     p = pm2.pos
     assert p is not None and p.state == PositionState.OPEN and p.side == Side.LONG
