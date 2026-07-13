@@ -55,6 +55,24 @@ def _agg(entry, k):
     return htf
 
 
+def test_interval_min_letters():
+    """_interval_min must accept D/W/M — dict.get(k, int(k)) evaluated the
+    default eagerly and blew up on 'D', killing every daily-HTF sweep."""
+    from app.trading_bybit.backtest.engine import _interval_min
+    assert _interval_min("D") == 1440
+    assert _interval_min("W") == 10080
+    assert _interval_min("M") == 43200
+    assert _interval_min("15") == 15 and _interval_min("240") == 240
+    # 일봉 HTF 로 리플레이가 실제로 돈다 (게이트 판정의 D 경로 스모크)
+    cfg = BybitConfig()
+    cfg.htf_interval = "D"
+    entry = _series(800)
+    r = replay("BTC", "trend_breakout", cfg, entry_candles=entry,
+               htf_candles=_agg(entry, 96))
+    assert r["bars"] == 800 and isinstance(r["snapshots"], int)
+    print("ok  _interval_min D/W/M + daily-HTF replay smoke")
+
+
 def test_frac_windows():
     """IS(0,0.7) + OOS(0.7,1) must partition the full replay: window edges
     meet at the split index and snapshot counts add up to the full run."""
@@ -107,6 +125,7 @@ def test_build_report_structure():
 
 
 if __name__ == "__main__":
+    test_interval_min_letters()
     test_frac_windows()
     test_build_report_structure()
     print("\nall gatereport tests passed ✅")

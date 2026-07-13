@@ -21,8 +21,11 @@ BYBIT_REST = "https://api.bybit.com/v5/market/kline"
 
 
 def _interval_min(interval: str) -> int:
+    # NOTE: dict.get(k, int(k)) 는 default 를 항상 먼저 평가해 "D"에서 터진다
     table = {"D": 1440, "W": 10080, "M": 43200}
-    return table.get(interval, int(interval))
+    if interval in table:
+        return table[interval]
+    return int(interval)
 
 
 PAGE_LIMIT = 1000        # Bybit v5 kline hard cap per request
