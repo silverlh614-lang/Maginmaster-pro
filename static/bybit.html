@@ -67,9 +67,34 @@
   .pos{color:var(--up)!important} .neg{color:var(--dn)!important}
 
   .wrap{max-width:1440px;margin:0 auto;padding:10px 12px 74px}
-  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+  /* grid-auto-flow dense = 중력: 빈 칸이 생기면 뒤 패널이 끌려 올라와 채움 */
+  .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px;grid-auto-flow:row dense}
   /* 화면 배치 편집: order 로 재배열, .phidden 으로 숨김 */
   .panel.phidden{display:none!important}
+  /* ── 직접 편집 모드: 헤더 드래그 이동(밀어내기) + 우/하/모서리 리사이즈 ── */
+  .layedit .grid>.panel{position:relative;outline:1px dashed rgba(247,147,26,.45);outline-offset:-1px}
+  .layedit .grid>.panel .phead{cursor:grab;touch-action:none;user-select:none}
+  .grid>.panel.dragging{opacity:.6;z-index:50;outline:2px solid var(--brand)}
+  .rz{position:absolute;z-index:20;display:none}
+  .layedit .rz{display:block}
+  .rz-r{top:0;right:-3px;width:9px;height:100%;cursor:ew-resize}
+  .rz-b{left:0;bottom:-3px;height:9px;width:100%;cursor:ns-resize}
+  .rz-c{right:-1px;bottom:-1px;width:16px;height:16px;cursor:nwse-resize;
+    background:linear-gradient(135deg,transparent 55%,var(--brand) 55%);border-radius:0 0 3px 0}
+  /* 저장된 폭(wN)은 데스크톱에서만 — 모바일 1열 스택은 그대로 유지 */
+  @media(min-width:981px){
+    .grid>.panel.w3{grid-column:span 3}.grid>.panel.w4{grid-column:span 4}
+    .grid>.panel.w5{grid-column:span 5}.grid>.panel.w6{grid-column:span 6}
+    .grid>.panel.w7{grid-column:span 7}.grid>.panel.w8{grid-column:span 8}
+    .grid>.panel.w9{grid-column:span 9}.grid>.panel.w10{grid-column:span 10}
+    .grid>.panel.w11{grid-column:span 11}.grid>.panel.w12{grid-column:1/-1}}
+  .panel.sized .pbody{overflow:auto}
+  .panel.sized .chartwrap{height:100%}
+  .editbar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:70;display:none;
+    align-items:center;gap:12px;background:var(--panel-2);border:1px solid var(--brand);
+    border-radius:6px;padding:9px 14px;font-size:11px;box-shadow:0 8px 30px rgba(0,0,0,.6)}
+  .editbar.show{display:flex}
+  .editbar .go{background:var(--up);border-color:var(--up);color:#04150a;font-weight:800}
   .lay-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:60}
   .lay-ov.show{display:flex;align-items:flex-end;justify-content:center}
   .lay-sheet{width:100%;max-width:560px;max-height:78vh;overflow-y:auto;background:var(--panel);
@@ -342,11 +367,19 @@
 <div class="lay-ov" id="layOv">
   <div class="lay-sheet">
     <div class="lay-head">🧩 화면 배치 <span class="sp"></span>
+      <button class="lay-btn" onclick="enterEdit()">🖱 드래그 편집</button>
       <button class="lay-btn" onclick="resetLayout()">기본값 복원</button>
       <button class="lay-btn" onclick="closeLayout()">✕ 닫기</button></div>
-    <div class="lay-hint">▲▼ 순서 이동 · 스위치 표시/숨김 — 즉시 적용되고 이 기기에 저장됩니다.</div>
+    <div class="lay-hint">▲▼ 순서 이동 · 스위치 표시/숨김 — 즉시 적용되고 이 기기에 저장됩니다.
+      <b>드래그 편집</b>: 대시보드에서 직접 끌어 이동(밀어내기)·크기 조절.</div>
     <div id="layRows"></div>
   </div>
+</div>
+
+<!-- 직접 편집 모드 하단 바 -->
+<div class="editbar" id="editBar">🧩 배치 편집 —
+  <span class="muted">헤더 드래그: 이동(밀어내기) · 우/하단 가장자리: 폭/높이 · 모서리: 동시 · 핸들 더블클릭: 초기화</span>
+  <button class="lay-btn go" onclick="exitEdit()">✓ 완료</button>
 </div>
 
 <div class="ticker"><div class="rail" id="rail"><span class="it">로딩 중…</span></div></div>
@@ -1118,11 +1151,83 @@ function _effOrder(){
   return saved.concat(ids.filter(id=>!saved.includes(id)));
 }
 function applyLayout(){
-  const order=_effOrder(), hidden=new Set(_loadLay().hidden||[]);
+  const l=_loadLay(), order=_effOrder(), hidden=new Set(l.hidden||[]);
+  const W=l.w||{}, HH=l.h||{};
   _panels().forEach(p=>{const id=p.dataset.panel;
     p.style.order=order.indexOf(id);
-    p.classList.toggle("phidden",hidden.has(id));});
+    p.classList.toggle("phidden",hidden.has(id));
+    for(let i=3;i<=12;i++)p.classList.remove("w"+i);          // 폭: wN 클래스 (모바일은 미적용)
+    if(W[id])p.classList.add("w"+W[id]);
+    if(HH[id]){p.style.height=HH[id]+"px";p.classList.add("sized");}
+    else{p.style.height="";p.classList.remove("sized");}});
 }
+
+// ── 직접 편집 모드: 드래그 이동(밀어내기·FLIP) + x/y 리사이즈 ──
+function enterEdit(){closeLayout();document.body.classList.add("layedit");
+  _panels().forEach(p=>["r","b","c"].forEach(k=>{
+    const h=document.createElement("div");h.className="rz rz-"+k;h.dataset.rz=k;p.appendChild(h);}));
+  $("editBar").classList.add("show");}
+function exitEdit(){document.body.classList.remove("layedit");
+  document.querySelectorAll(".rz").forEach(e=>e.remove());
+  $("editBar").classList.remove("show");drawChart();}
+
+function _flip(except){
+  // 재배치 전 좌표를 기억했다가 이동분만큼 역변환→0 으로 풀어 "밀려나는" 모션
+  const els=_panels().filter(p=>!p.classList.contains("phidden"));
+  const first=new Map(els.map(p=>[p,p.getBoundingClientRect()]));
+  return ()=>{els.forEach(p=>{if(p===except)return;
+    const f=first.get(p),n=p.getBoundingClientRect();
+    const dx=f.left-n.left,dy=f.top-n.top;if(!dx&&!dy)return;
+    p.style.transition="none";p.style.transform=`translate(${dx}px,${dy}px)`;
+    requestAnimationFrame(()=>{p.style.transition="transform .18s ease";p.style.transform="";});});};
+}
+
+let _drag=null,_lastSwap=0;
+document.addEventListener("pointerdown",e=>{
+  if(!document.body.classList.contains("layedit"))return;
+  // 리사이즈 핸들
+  const rz=e.target.closest(".rz");
+  if(rz){e.preventDefault();
+    const p=rz.parentElement,id=p.dataset.panel,kind=rz.dataset.rz;
+    const grid=document.querySelector(".grid");
+    const unit=grid.getBoundingClientRect().width/12;
+    const move=ev=>{const l=_loadLay(),r=p.getBoundingClientRect();
+      if(kind!=="b"){const cols=Math.max(3,Math.min(12,Math.round((ev.clientX-r.left)/unit)));
+        (l.w=l.w||{})[id]=cols;}
+      if(kind!=="r"){const hh=Math.max(140,Math.min(900,Math.round(ev.clientY-r.top)));
+        (l.h=l.h||{})[id]=hh;}
+      _saveLay(l);applyLayout();if(id==="chart")drawChart();};
+    const up=()=>{document.removeEventListener("pointermove",move);
+      document.removeEventListener("pointerup",up);drawChart();};
+    document.addEventListener("pointermove",move);
+    document.addEventListener("pointerup",up);return;}
+  // 헤더 드래그로 위치 이동
+  if(e.target.closest("button,a,select,input,label"))return;
+  const ph=e.target.closest(".phead");if(!ph)return;
+  const p=ph.closest(".grid>.panel[data-panel]");if(!p)return;
+  e.preventDefault();_drag=p;p.classList.add("dragging");
+});
+document.addEventListener("pointermove",e=>{
+  if(!_drag)return;
+  if(performance.now()-_lastSwap<90)return;                    // 스왑 과속 방지
+  const over=document.elementsFromPoint(e.clientX,e.clientY)
+    .find(x=>x.matches&&x.matches(".grid>.panel[data-panel]")&&x!==_drag);
+  if(!over)return;
+  const order=_effOrder(),di=order.indexOf(_drag.dataset.panel),hi=order.indexOf(over.dataset.panel);
+  if(di<0||hi<0||di===hi)return;
+  order.splice(di,1);order.splice(hi,0,_drag.dataset.panel);   // 삽입 → 나머지가 밀려남
+  const play=_flip(_drag);
+  const l=_loadLay();l.order=order;_saveLay(l);applyLayout();play();
+  _lastSwap=performance.now();
+});
+document.addEventListener("pointerup",()=>{
+  if(_drag){_drag.classList.remove("dragging");_drag=null;renderLayoutRows&&0;}});
+document.addEventListener("dblclick",e=>{                      // 핸들 더블클릭 = 해당 축 초기화
+  const rz=e.target.closest(".rz");if(!rz)return;
+  const id=rz.parentElement.dataset.panel,l=_loadLay();
+  if(rz.dataset.rz!=="b"&&l.w)delete l.w[id];
+  if(rz.dataset.rz!=="r"&&l.h)delete l.h[id];
+  _saveLay(l);applyLayout();drawChart();});
 function renderLayoutRows(){
   const order=_effOrder(), hidden=new Set(_loadLay().hidden||[]);
   const byId={};_panels().forEach(p=>byId[p.dataset.panel]=p);
