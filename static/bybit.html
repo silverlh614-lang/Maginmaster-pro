@@ -514,6 +514,7 @@
         <div class="note">Bybit 과거 kline 리플레이 → 승률·R기대값·PF·MDD</div>
         <div style="margin:8px 0;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <button class="go" id="btnBt" onclick="runBacktest()">▶ 리플레이</button>
+          <button class="lay-btn" id="btnGate" onclick="runGateReport()" title="H7·H8 판정 매트릭스 (IS/OOS)">🧪 게이트 판정</button>
           <button class="lay-btn" id="btnBtCsv" onclick="exportBacktestCsv()" disabled>⬇ CSV</button>
           <span class="muted" style="font-size:10px">기간<select id="btDays" class="ov" style="width:64px">
             <option value="10">10일</option><option value="30" selected>30일</option>
@@ -1139,6 +1140,37 @@ async function runBacktest(){
       · MDD ${money(m.max_drawdown_usd)} · 최대연패 ${m.max_losing_streak}
       <br><span class="muted" style="font-size:10px">${d.snapshots} 바 평가 · 최종자산 ${money(d.final_equity)}</span>`;
   }catch(e){$("btOut").innerHTML='<span class="dn">실패: '+e.message+'</span>';}}
+
+// ---- 게이트 판정 러너 (H7·H8 IS/OOS 매트릭스 → 판정 초안) ----
+async function runGateReport(){
+  const days=parseFloat($("btDays").value)||30;
+  $("btOut").textContent=`게이트 판정 실행 중… (${days}일 × H7 3구간 × H8 2구간 × IS/OOS — 수십 초 걸릴 수 있음)`;
+  $("btnGate").disabled=true;
+  try{
+    const d=await api("/api/bybit/gatereport",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({symbol:SYM,days:days,split:0.7})});
+    const cell=c=>`<td>${c.trades}</td><td class="${(c.net_usd||0)>=0?'up':'dn'}">${money(c.net_usd)}</td>
+      <td>${c.expectancy_r!=null?fmt(c.expectancy_r,2):"–"}</td><td>${c.pf!=null?fmt(c.pf,2):"–"}</td>
+      <td>${money(c.mdd_usd)}</td>`;
+    const rows7=d.h7.cells.map(c=>`<tr><td class="l">${c.htf==="D"?"일봉":c.htf+"분"}${c.htf==="60"?" (현행)":""}</td>
+      <td>${c.seg}</td>${cell(c)}</tr>`).join("");
+    const rows8=d.h8.cells.map(c=>`<tr><td class="l">${c.exempt?"ON":"OFF (현행)"}</td><td>${c.seg}</td>${cell(c)}
+      <td>${c.short_trades}</td><td class="${(c.short_net_usd||0)>=0?'up':'dn'}">${money(c.short_net_usd)}</td></tr>`).join("");
+    const vd=v=>`<span class="${v.startsWith("CONFIRM")?"up":v.startsWith("REJECT")?"dn":"muted"}">${v}</span>`;
+    $("btOut").innerHTML=`
+      <b>H7 · HTF 원형 복원 스윕</b> <span class="muted">(IS ${Math.round(d.split*100)}% / OOS ${100-Math.round(d.split*100)}% · ${d.entry_bars}봉)</span>
+      <div class="scroll" style="max-height:150px;margin:4px 0"><table>
+        <thead><tr><th class="l">HTF</th><th>구간</th><th>N</th><th>순손익</th><th>E[R]</th><th>PF</th><th>MDD</th></tr></thead>
+        <tbody>${rows7}</tbody></table></div>
+      <div class="note">판정 초안: ${vd(d.h7.verdict)}</div>
+      <b style="display:block;margin-top:9px">H8 · SHORT 거래량 면제</b>
+      <div class="scroll" style="max-height:130px;margin:4px 0"><table>
+        <thead><tr><th class="l">면제</th><th>구간</th><th>N</th><th>순손익</th><th>E[R]</th><th>PF</th><th>MDD</th><th>S·N</th><th>S·순익</th></tr></thead>
+        <tbody>${rows8}</tbody></table></div>
+      <div class="note">판정 초안: ${vd(d.h8.verdict)}</div>
+      <div class="note muted" style="margin-top:6px;font-size:10px">${d.note}</div>`;
+  }catch(e){$("btOut").innerHTML='<span class="dn">게이트 판정 실패: '+e.message+'</span>';}
+  finally{$("btnGate").disabled=false;}}
 
 // ---- 화면 배치 편집 (order/숨김 → localStorage, 서버 무관 이 기기 전용) ----
 const LAYOUT_KEY="bybit_layout_v1";

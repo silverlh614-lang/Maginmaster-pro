@@ -151,6 +151,42 @@ def backtest(req: BacktestRequest):
             "trade_rows": r["trades"][:2000]}
 
 
+class GateReportRequest(BaseModel):
+    symbol: str = "BTC"
+    days: float = 30.0
+    split: float = 0.7          # IS 비율 (나머지가 OOS)
+
+
+@router.post("/gatereport")
+def gatereport(req: GateReportRequest):
+    """H7·H8 판정 매트릭스 실행 — kline 을 (심볼, 인터벌)당 1회만 받아
+    모든 조합에 재사용한다. 결과는 판정 '초안'(레지스트리 기록은 사람 몫)."""
+    import copy
+
+    from .backtest.engine import _interval_min, fetch_history
+    from .backtest.gatereport import H7_IVS, build_report
+
+    if req.symbol.upper() not in SYMBOL_SPECS:
+        raise HTTPException(422, f"unknown symbol '{req.symbol}'")
+    if not (0.5 <= req.split <= 0.9):
+        raise HTTPException(422, "split must be within [0.5, 0.9]")
+    spec = SYMBOL_SPECS[req.symbol.upper()]
+    cfg = copy.copy(CONFIG)
+    days = min(max(req.days, 3.0), 365.0)
+    entry_min = _interval_min(cfg.entry_interval)
+    bars = max(400, int(days * 1440 / entry_min))
+    span_min = bars * entry_min
+    try:
+        entry = fetch_history(spec.symbol, cfg.entry_interval, bars)
+        htf_by_iv: dict = {}
+        for iv in {*H7_IVS, cfg.htf_interval}:
+            hb = span_min // _interval_min(iv) + 2 * (2 * cfg.adx_period + 1)
+            htf_by_iv[iv] = fetch_history(spec.symbol, iv, hb)
+    except Exception as e:
+        raise HTTPException(502, f"gatereport kline fetch failed: {e}")
+    return build_report(spec.key, cfg, entry, htf_by_iv, req.split)
+
+
 @router.get("/config")
 def config():
     return {"config": CONFIG.as_dict(),

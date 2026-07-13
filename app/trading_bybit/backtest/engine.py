@@ -114,10 +114,16 @@ class _StructuralRisk:
 def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
            entry_candles: list[Candle] | None = None,
            htf_candles: list[Candle] | None = None,
-           bars: int = 1000) -> dict:
+           bars: int = 1000,
+           frac: tuple[float, float] = (0.0, 1.0)) -> dict:
     """Replay one symbol. Candles can be injected (offline tests) or fetched
     (paginated, `bars` entry-TF bars). Returns {trades, closes, equity_curve,
-    snapshots}."""
+    snapshots}.
+
+    frac=(a,b) evaluates only the [a,b) fraction of the entry timeline —
+    indicators still see the full prefix, so IS/OOS splits share no trades
+    but keep identical warmup semantics (레지스트리의 '등록 이후 데이터로만
+    판정' 규율을 도구로 강제하는 통로)."""
     spec: SymbolSpec = SYMBOL_SPECS[symbol.upper()]
     if entry_candles is None:
         entry_candles = fetch_history(spec.symbol, cfg.entry_interval, bars)
@@ -138,9 +144,14 @@ def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
     warmup = max(cfg.box_lookback, cfg.atr_period, cfg.vol_ma_period,
                  cfg.ema_period, cfg.range_lookback, 2 * cfg.adx_period + 1) + 2
 
+    n = len(entry_candles)
+    lo = max(warmup, int(n * float(frac[0])))
+    hi = min(n, int(n * float(frac[1])))
+
     equity_curve: list[float] = []
     snapshots = 0
-    for i in range(warmup, len(entry_candles)):
+    ctx = None
+    for i in range(lo, hi):
         bar = entry_candles[i]
         closed_entry = entry_candles[:i + 1]
         bar_close_t = bar.ts_ms + entry_min * 60_000
@@ -168,11 +179,11 @@ def replay(symbol: str, strategy_name: str, cfg: BybitConfig,
                 pm.try_open(sig, bar.close, atr_val or 0.0, ctx.now)
         equity_curve.append(round(pm.equity, 4))
 
-    # force-close any position still open at the end of the data
-    if pm.pos and pm.pos.state.value == "OPEN":
-        pm._close(entry_candles[-1].close, "backtest end", ctx.now)
+    # force-close any position still open at the end of the window
+    if pm.pos and pm.pos.state.value == "OPEN" and ctx is not None:
+        pm._close(entry_candles[hi - 1].close, "backtest end", ctx.now)
 
     closes = [r for r in journal.rows if r["event"] == "CLOSE"]
     return {"trades": journal.rows, "closes": closes,
             "equity_curve": equity_curve, "snapshots": snapshots,
-            "final_equity": round(pm.equity, 4)}
+            "final_equity": round(pm.equity, 4), "window": [lo, hi], "bars": n}

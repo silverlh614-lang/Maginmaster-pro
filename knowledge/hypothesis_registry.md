@@ -79,6 +79,8 @@
 - **판정 기준**: Phase 2 백테스트 스윕 `htf_interval: [60, 240, D]`에서 D(또는
   240)가 60 대비 net edge·PF·MDD 모두 우위 AND 등록 이후 신규 kline OOS
   재실행에서 우위 유지. 통과 시 `BYBIT_HTF_INTERVAL` env로만 반영.
+- **판정 도구**: `POST /api/bybit/gatereport` (관제탑 [🧪 게이트 판정] 버튼) —
+  IS/OOS 분할 매트릭스와 판정 초안 자동 생성. 심볼 탭별 실행해 교차 일관성 확인.
 
 ## H8. [Bybit] 무거래량 음봉 장악형 숏 예외 (원전 p31)
 
@@ -92,6 +94,8 @@
   net edge 개선 AND 전체 MDD 악화 없음 AND OOS 재검증 통과. 게이트 완화는
   리스크 증가 방향이므로 미달 시 즉시 REJECTED — 통과 전 구현 금지.
   (검증 인프라: config `short_vol_exempt` 플래그 기본 off, 백테스트 오버라이드로만 on)
+- **판정 도구**: H7과 동일 — `POST /api/bybit/gatereport`가 OFF/ON × IS/OOS
+  매트릭스와 SHORT 전용 지표(S·N, S·순손익)를 함께 출력.
 
 ## H9. [Bybit] 사이클 국면 필터 — 200주선 하회 시 LONG 억제
 
