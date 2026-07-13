@@ -147,6 +147,22 @@
     color:var(--dim);font:inherit;font-size:11px;padding:3px 10px;letter-spacing:.06em}
   .symtabs button:last-child{border-right:0}
   .symtabs button.on{background:var(--brand);color:#171204;font-weight:800}
+  /* UI 개선: 크로스헤어 툴팁·현재가 펄스·카운트다운·갱신표시·게이트 글로우 */
+  .panel{transition:border-color .25s}
+  .panel:hover{border-color:var(--border-hi)}
+  #chartTip{position:absolute;z-index:5;pointer-events:none;display:none;
+    background:rgba(10,12,14,.94);border:1px solid var(--border-hi);border-radius:4px;
+    padding:6px 9px;font-size:10px;line-height:1.55;white-space:nowrap}
+  #pxDot{position:absolute;z-index:3;width:8px;height:8px;border-radius:50%;
+    background:currentColor;pointer-events:none;display:none;transform:translate(-50%,-50%)}
+  #pxDot::after{content:"";position:absolute;inset:-4px;border-radius:50%;
+    border:1.5px solid currentColor;animation:pxping 1.6s ease-out infinite}
+  @keyframes pxping{0%{transform:scale(.5);opacity:.9}100%{transform:scale(1.9);opacity:0}}
+  .ring svg{transition:filter .4s}
+  .ring.go svg{filter:drop-shadow(0 0 7px rgba(46,229,138,.65))}
+  #ringArc{transition:stroke-dashoffset .5s ease}
+  .upd{font-size:10px;color:var(--faint)} .upd.stale{color:var(--dn);font-weight:700}
+  .dl{font-size:10px;border:1px solid var(--border);border-radius:3px;padding:2px 7px}
 
   /* FSM stages */
   .stages{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-bottom:12px}
@@ -259,6 +275,7 @@
   <span class="badge off" id="modeBadge">OFFLINE</span>
   <span class="kv"><b id="botLabel">확인 중…</b></span>
   <span class="kv" id="botNote"></span>
+  <span class="upd" id="lastUpd"></span>
   <span class="kv">EQUITY <b id="sEquity">$--</b></span>
   <span class="kv">TRADES <b id="sTrades">0</b>/<span id="sTradesMax">20</span></span>
   <span class="kv">DAILY <b id="sDaily">$0.00</b></span>
@@ -308,7 +325,8 @@
     <!-- 라이브 차트 -->
     <section class="panel col8">
       <div class="phead"><span class="mk">◆</span> 라이브 차트 · 15m + 5EMA + 박스 + 포지션
-        <span class="sp"></span><span class="r" id="chTf">BTCUSDT</span></div>
+        <span class="sp"></span><span class="r muted" id="barCd" style="font-size:10px;margin-right:10px">–</span>
+        <span class="r" id="chTf">BTCUSDT</span></div>
       <div class="pbody" style="padding:0">
         <div class="chartwrap">
           <div class="chiplegend">
@@ -320,6 +338,8 @@
             <span><i style="border-color:var(--brand);border-top-style:dashed"></i>트레일</span>
           </div>
           <div class="flash" id="flash"></div>
+          <div id="chartTip"></div>
+          <div id="pxDot"></div>
           <canvas id="chart"></canvas>
         </div>
       </div>
@@ -540,7 +560,16 @@ let LAST={}, lastCloseKey=null;
 
 function clock(){const now=new Date();$("clk").textContent=now.toISOString().slice(11,19);
   const kst=new Date(now.getTime()+9*3600*1000);$("clkKst").textContent=kst.toISOString().slice(11,16);
-  $("fClock").textContent=now.toISOString().slice(11,19)+" UTC";}
+  $("fClock").textContent=now.toISOString().slice(11,19)+" UTC";
+  // 다음 진입봉 마감 카운트다운 — 봇은 봉 마감마다 판정하므로 다음 행동 시각
+  const ivm=parseInt((window._cfg&&window._cfg.entry_interval)||"15",10)*60;
+  const rem=ivm-(Math.floor(now.getTime()/1000)%ivm);
+  $("barCd").textContent="다음 봉 "+String(Math.floor(rem/60)).padStart(2,"0")+":"+String(rem%60).padStart(2,"0");
+  // 상태 폴 신선도 — 10초 이상 갱신 없으면 경고색
+  const lu=$("lastUpd");
+  if(lu){const ago=window._lastOk?Math.round((now.getTime()-window._lastOk)/1000):null;
+    lu.textContent=ago==null?"":"갱신 "+ago+"s 전";
+    lu.className="upd"+(ago!=null&&ago>10?" stale":"");}}
 setInterval(clock,1000);clock();
 
 async function loadConfig(){try{
@@ -563,7 +592,8 @@ function renderGates(dg){
   const box=$("gates");
   if(!dg){box.innerHTML='<div class="note">봉 워밍업 중… (지표 계산에 충분한 캔들 대기)</div>';
     $("gDir").textContent="–";$("ringNum").textContent="0/4";$("ringArc").setAttribute("stroke-dashoffset",289);
-    $("readyTag").textContent="대기";$("readyTag").className="ready-tag";return;}
+    $("readyTag").textContent="대기";$("readyTag").className="ready-tag";
+    const r0=document.querySelector(".ring");if(r0)r0.classList.remove("go");return;}
   box.innerHTML=dg.gates.map(g=>`<div class="gate ${g.ok?'ok':''}">
     <span class="dot"></span><span class="lb">${g.label}</span><span class="nf">${g.info||""}</span></div>`).join("");
   const dir=dg.allowed;
@@ -574,6 +604,8 @@ function renderGates(dg){
   $("ringArc").setAttribute("stroke", dg.ready?"var(--up)":"var(--brand)");
   $("readyTag").textContent=dg.ready?("★ "+dir+" 진입 준비 완료"):"게이트 "+dg.passed+"/"+dg.total;
   $("readyTag").className="ready-tag"+(dg.ready?" on":"");
+  const ring=document.querySelector(".ring");
+  if(ring)ring.classList.toggle("go",!!dg.ready);
 }
 
 const STAGE_DEF=[["S1","FLAT"],["S2","OPEN"],["S3","부분익절"],["S4","트레일링"],["S5","CLOSED"]];
@@ -641,7 +673,8 @@ function drawChart(){
     let msg="봉 워밍업 중… kline 수집 중";
     if(fd.source&&fd.source!=="none") msg="봉 워밍업 중… ("+fd.source+" 연결됨, 캔들 대기)";
     else if(fd.last_error) msg="⚠ kline 소스 연결 실패 — "+fd.last_error;
-    g.fillStyle=fd.last_error?"#ff6b74":"#4e5864";g.font="12px monospace";g.fillText(msg,16,H/2);return;}
+    g.fillStyle=fd.last_error?"#ff6b74":"#4e5864";g.font="12px monospace";g.fillText(msg,16,H/2);
+    $("pxDot").style.display="none";return;}
   const cs=data.candles, ema=data.ema5||[];
   const ov=window._overlay||{};
   const padT=14,padB=42,padL=6,padR=64;
@@ -680,16 +713,64 @@ function drawChart(){
     g.fillStyle=col;g.fillRect(padL+cw,Y(v)-6,padR,12);g.fillStyle="#050607";g.textAlign="left";
     g.font="8px monospace";g.fillText(fmt(v,1),padL+cw+4,Y(v)+3);};
   oline(ov.entry,"#ffffff");oline(ov.stop,"#ff4d5c");oline(ov.target,"#2ee58a");oline(ov.trail,"#f7931a",true);
-  // last price marker
-  const last=cs[cs.length-1][4];g.fillStyle="#38d5ff";g.beginPath();
-  g.arc(X(cs.length-1),Y(last),3,0,7);g.fill();
+  // 현재가 라인 + 우측 가격 태그 (마지막 봉 방향색) + 펄스 점
+  const last=cs[cs.length-1][4], lastUp=cs[cs.length-1][4]>=cs[cs.length-1][1];
+  const lc=lastUp?"#2ee58a":"#ff4d5c";
+  g.strokeStyle=lc;g.globalAlpha=.5;g.setLineDash([2,3]);g.beginPath();
+  g.moveTo(padL,Y(last));g.lineTo(padL+cw,Y(last));g.stroke();g.setLineDash([]);g.globalAlpha=1;
+  g.fillStyle=lc;g.fillRect(padL+cw,Y(last)-7,padR,14);
+  g.fillStyle="#050607";g.font="bold 9px monospace";g.fillText(fmt(last,1),padL+cw+4,Y(last)+3);
+  const dot=$("pxDot");dot.style.display="block";dot.style.color=lc;
+  dot.style.left=X(cs.length-1)+"px";dot.style.top=Y(last)+"px";
+  // 크로스헤어 (호버 시)
+  window._geo={X,Y,padL,padT,cw,ch,cs,lo,hi};
+  const hv=window._hover;
+  if(hv&&hv.i<cs.length){const hx=X(hv.i);
+    g.strokeStyle="rgba(215,224,231,.35)";g.setLineDash([3,3]);
+    g.beginPath();g.moveTo(hx,padT);g.lineTo(hx,padT+ch);g.stroke();
+    if(hv.my>=padT&&hv.my<=padT+ch){
+      g.beginPath();g.moveTo(padL,hv.my);g.lineTo(padL+cw,hv.my);g.stroke();
+      const pv=lo+(hi-lo)*(1-(hv.my-padT)/ch);
+      g.setLineDash([]);g.fillStyle="#1b2027";g.fillRect(padL+cw,hv.my-6,padR,12);
+      g.fillStyle="#d7e0e7";g.font="8px monospace";g.fillText(fmt(pv,1),padL+cw+4,hv.my+3);}
+    g.setLineDash([]);}
 }
+
+// 차트 크로스헤어 + OHLCV 툴팁 (마우스/터치)
+(function(){
+  const cv=$("chart"),tip=$("chartTip");
+  function hide(){window._hover=null;tip.style.display="none";drawChart();}
+  function onMove(e){
+    const geo=window._geo;if(!geo){return;}
+    const r=cv.getBoundingClientRect();
+    const cx=e.touches?e.touches[0].clientX:e.clientX;
+    const cy=e.touches?e.touches[0].clientY:e.clientY;
+    const mx=cx-r.left,my=cy-r.top;
+    if(mx<geo.padL||mx>geo.padL+geo.cw){hide();return;}
+    const n=geo.cs.length;
+    const i=Math.max(0,Math.min(n-1,Math.round((mx-geo.padL)/geo.cw*(n-1))));
+    window._hover={i,my};drawChart();
+    const c=geo.cs[i],chg=(c[4]/c[1]-1)*100;
+    tip.innerHTML=`<b>${new Date(c[0]).toISOString().slice(5,16).replace("T"," ")}</b> UTC<br>`+
+      `시 ${fmt(c[1],1)} · 고 <span class="up">${fmt(c[2],1)}</span> · 저 <span class="dn">${fmt(c[3],1)}</span> · 종 <b>${fmt(c[4],1)}</b><br>`+
+      `<span class="${chg>=0?'up':'dn'}">${chg>=0?'+':''}${fmt(chg,2)}%</span> · 거래량 ${fmt(c[5],1)}`;
+    tip.style.display="block";
+    const ww=cv.parentElement.clientWidth;
+    tip.style.left=(mx+16+170>ww?mx-176:mx+16)+"px";
+    tip.style.top=Math.max(6,my-24)+"px";
+  }
+  cv.addEventListener("mousemove",onMove);
+  cv.addEventListener("mouseleave",hide);
+  cv.addEventListener("touchmove",e=>{onMove(e);e.preventDefault();},{passive:false});
+  cv.addEventListener("touchend",hide);
+})();
 async function loadCandles(){try{const d=await api("/api/bybit/candles?symbol="+SYM+"&tf=entry&limit=120");
   window._candles=d;drawChart();}catch(e){}}
 window.addEventListener("resize",drawChart);
 
 async function refresh(){
   let s;try{s=await api("/api/bybit/status");}catch(e){return;} LAST=s;
+  window._lastOk=Date.now();
   const run=s.running;
   $("modeBadge").className="badge "+(run?"live":"off");
   $("modeBadge").textContent=run?"LIVE-PAPER":"OFFLINE";
